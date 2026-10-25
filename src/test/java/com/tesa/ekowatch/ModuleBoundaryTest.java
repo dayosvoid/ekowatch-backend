@@ -9,8 +9,15 @@ class ModuleBoundaryTest {
     @Test
     void modulesDoNotAccessOtherModulesInternals() {
         JavaClasses classes = new ClassFileImporter().importPackages("com.tesa.ekowatch");
-        // Concrete module dependencies will be checked when implementation classes exist.
-        // TODO: add ArchUnit layered/module rules before merging feature branches.
-        org.junit.jupiter.api.Assertions.assertFalse(classes.isEmpty());
+        String[] modules = {"auth", "user", "ward", "collection", "report", "confirmation", "dashboard"};
+        for (String source : modules)
+            for (String target : modules)
+                if (!source.equals(target)) {
+                    ArchRuleDefinition.noClasses().that().resideInAPackage("com.tesa.ekowatch." + source + "..")
+                            .should().dependOnClassesThat().resideInAnyPackage(
+                                    "com.tesa.ekowatch." + target + ".domain..", "com.tesa.ekowatch." + target + ".repository..",
+                                    "com.tesa.ekowatch." + target + ".service..", "com.tesa.ekowatch." + target + ".web..")
+                            .allowEmptyShould(true).check(classes);
+                }
     }
 }

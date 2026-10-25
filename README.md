@@ -20,4 +20,7 @@ Esther: `feat/api-access` — OpenAPI, controllers, authentication, role checks 
 
 ## Status
 
-Scaffold only. **No working API, authentication, business schema, seed data, or concurrency protection yet.** The CI workflow runs Maven verification, not deployment. ArchUnit rules are placeholders. Do not claim capstone requirements are complete.
+The Data & Rules foundation includes Flyway schema, transactional report/confirmation and pickup services,
+PostgreSQL concurrency tests, opt-in fictional demo data, request-ID logging and ArchUnit module boundaries.
+See [Engineer A handoff](docs/engineer-a-handoff.md) for service contracts, local setup and integration tasks.
+REST endpoints and authentication still require Engineer B's implementation. The CI workflow verifies Maven; it does not deploy.

@@ -1,15 +1,23 @@
 spring:
   application:
     name: ekowatch
+
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/ekowatch}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    url: ${DB_URL:jdbc:postgresql://localhost:5434/ekowatch}
+    username: ${DB_USERNAME:ekowatch}
+    password: ${DB_PASSWORD:ekowatch_dev}
+
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+
   flyway:
     enabled: true
+    locations: classpath:db/migration
+
 server:
   port: ${PORT:8081}
+logging:
+  pattern:
+    level: '%5p [requestId=%X{requestId:-}]'
