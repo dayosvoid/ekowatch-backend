@@ -3,9 +3,9 @@ spring:
     name: ekowatch
 
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5434/ekowatch}
-    username: ${DB_USERNAME:ekowatch}
-    password: ${DB_PASSWORD:ekowatch_dev}
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
 
   jpa:
     hibernate:
