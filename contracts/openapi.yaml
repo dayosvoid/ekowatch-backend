@@ -1,0 +1,367 @@
+openapi: 3.0.3
+
+info:
+  title: EkoWatch API
+  description: API for reporting blocked drains, confirming reports and managing waste collection records.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8081
+
+security:
+  - basicAuth: []
+
+paths:
+
+  /api/reports:
+    post:
+      summary: Create a blocked-drain report
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportRequest'
+      responses:
+        '201':
+          description: Report created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    get:
+      summary: List reports
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReportView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/reports/{reportId}:
+    get:
+      summary: Get a report
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '200':
+          description: Report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reports/{reportId}/confirmations:
+    post:
+      summary: Confirm a report
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ReportId'
+      responses:
+        '201':
+          description: Confirmation recorded
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Confirmation is not allowed or is duplicated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/authority/reports:
+    get:
+      summary: List reports for an authority
+      security:
+        - basicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Reports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReportView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/pickups:
+    post:
+      summary: Record a collection pickup
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PickupRequest'
+      responses:
+        '201':
+          description: Pickup recorded
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Pickup already recorded for the street and date
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/authority/missed-pickups:
+    get:
+      summary: Find missed pickups
+      security:
+        - basicAuth: []
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: through
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Missed pickups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MissedPickup'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+
+  securitySchemes:
+
+    basicAuth:
+      type: http
+      scheme: basic
+
+  parameters:
+
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+  schemas:
+
+    CreateReportRequest:
+      type: object
+      required:
+        - wardId
+        - streetId
+        - reportType
+        - description
+      properties:
+        wardId:
+          type: string
+          format: uuid
+        streetId:
+          type: string
+          format: uuid
+        reportType:
+          type: string
+          enum:
+            - BLOCKED_DRAIN
+        description:
+          type: string
+          maxLength: 2000
+          minLength: 1
+
+    ReportView:
+      type: object
+      required:
+        - id
+        - reporterId
+        - wardId
+        - streetId
+        - reportType
+        - description
+        - status
+        - createdAt
+        - updatedAt
+        - confirmationCount
+      properties:
+        id:
+          type: string
+          format: uuid
+        reporterId:
+          type: string
+          format: uuid
+        wardId:
+          type: string
+          format: uuid
+        streetId:
+          type: string
+          format: uuid
+        reportType:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        confirmationCount:
+          type: integer
+          format: int64
+
+    PickupRequest:
+      type: object
+      required:
+        - streetId
+        - date
+        - status
+      properties:
+        streetId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum:
+            - COMPLETED
+            - FAILED
+
+    MissedPickup:
+      type: object
+      required:
+        - streetId
+        - date
+      properties:
+        streetId:
+          type: string
+          format: uuid
+        date:
+          type: string
+          format: date
+
+    ApiError:
+      type: object
+      required:
+        - code
+        - message
+        - requestId
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+
+  responses:
+
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    Unauthorized:
+      description: Authentication required
+
+    Forbidden:
+      description: Access denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
