@@ -1,3 +1,18 @@
+# Step 6 contract — authority, hazards and derived disputes
+
+This section supersedes earlier current-status statements for Step 6. No schema migration is required; V1–V4 and existing records/UUIDs are unchanged. Demo fixtures remain compatible and insert-only; expansion remains Step 8.
+
+`AuthorityApi.getWardDashboard(UUID actorId, UUID wardId, LocalDate fromDate, LocalDate toDate)` returns `WardDashboardView`, with exactly the build.md fields and long counts. AUTHORITY is enforced in the service. The inclusive range must contain 1–31 days. `operatorPerformance` contains only operators with dated occurrences in that range, ordered by display name then UUID. Attribution uses the occurrence's operator_id regardless of later ward assignment changes. Completed counts include disputed completions; missed counts include only elapsed uncompleted occurrences; disputed counts count occurrences, not witness reports. Today is Africa/Lagos.
+
+`ReportApi.listWardHazards(UUID actorId, UUID wardId)` requires an existing user and ward. `WardHazardsView` fields are wardId, generatedAt, newestReportAt and items (`List<ReportView>`). The list is unpaginated and untruncated, contains blocked-drain reports and CURRENT flood reports, ordered by createdAt descending then reportId ascending. It uses the existing private ReportView projection and street coordinates only. No performance fields appear in normal views.
+
+For both reads, newestReportAt is max(created_at) across **all reports in the ward**, nullable for no reports. It is a submission timestamp, not lastEvidenceAt. Hazard counts/list are a snapshot at generatedAt, independent of the pickup date range; count reports, not streets. Freshness uses the same configured hours and strict expiry boundary as report reads. A repeatable-read transaction and one captured Clock instant keep the response internally consistent. No read writes counters or changes facts.
+
+DISPUTED is derived only from completion plus MISSED_PICKUP for the exact street/date. Schedule reads and repeat completion responses reflect it. An uncompleted occurrence stays SCHEDULED until elapsed even when a report exists. Both original facts and timestamps survive. Concurrent responses may precede the other transaction's commit; subsequent reads derive the combined committed facts. No dispute resolution workflow exists.
+
+The transitional ReportApi.authorityReports operation is removed; its valid authority-role tests now exercise AuthorityApi. Esther must expose the new service methods through her principal, parsing, authorization and HTTP mapping layer; actorId never comes from JSON. No controllers or HTTP routes were added.
+
+---
 # Step 5 contract - repeat-safe confirmation and flood freshness
 
 Current schema is V4__report_confirmations.sql. Earlier sections below are historical where superseded. V1/V2/V3 are unchanged, including the Step 4 cutover. V4 performs metadata-only renames, with no row insert/delete/update: confirmations -> report_confirmations; user_id -> resident_id; created_at -> confirmed_at; unique constraint -> uq_report_confirmation_resident(report_id,resident_id). PK/FK constraint names and the resident lookup index are renamed consistently. All confirmation UUIDs, values, timestamps, defaults, nullability, uniqueness and FKs survive.
@@ -225,7 +240,7 @@ Remove current reporterId, status and updatedAt from ReportView. Never expose re
 | CollectionView | collectionId (collections.id UUID), streetId (street_id UUID), collectionDate (collection_date LocalDate), completedAt (completed_at nullable Instant when no completion), collectionStatus (derived CollectionStatus). build.md does not specify collectionId nullability for an uncompleted occurrence; settle when implementing the view. |
 | WardDashboardView | wardId (UUID), fromDate (LocalDate), toDate (LocalDate), generatedAt (Instant), missedPickupCount (integral), disputedPickupCount (integral), blockedDrainCount (integral), currentFloodCount (integral), newestReportAt (nullable Instant), operatorPerformance (OperatorPerformanceView collection). |
 | OperatorPerformanceView | operatorId (schedule operator_id UUID), operatorName (users.display_name String), scheduledPickupCount, completedPickupCount, missedPickupCount, disputedPickupCount (all integral). |
-| WardHazardsView | CURRENT flood and BLOCKED_DRAIN report views, generatedAt (Instant), nullable newestReportAt (Instant). build.md does not enumerate the report-list member name or any additional fields; no invented full shape is binding. No silent truncation of one ward. |
+| WardHazardsView | CURRENT flood and BLOCKED_DRAIN report views, generatedAt (Instant), nullable newestReportAt (Instant). The full-team plan specifies items (`List<ReportView>`) as the report-list member; no reports alias exists. No silent truncation of one ward. |
 | Page<T> | items (T collection), page (int), size (int), totalElements (integral), totalPages (int). |
 | CurrentUserView, WardView, StreetView, PhotoView | Required exact type names; build.md does not enumerate full fields. Bind only required stored preference/ward/street and authorised photo information in their owning steps. Never expose passwordHash, raw storage keys, or private reporter identity. |
 

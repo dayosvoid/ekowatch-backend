@@ -1,3 +1,34 @@
+# Step 6 items contract correction - 31 October 2026
+
+Renamed WardHazardsView's list component and accessor from reports/reports() to items/items(), matching the full-team plan. No alias remains. Updated all callers in CollectionRulesTest and the data-contract/handoff documents. Added an exact serialized-field allowlist (wardId, generatedAt, newestReportAt, items) and asserted the 105 returned entries are under items. Existing Step 6 behaviour and valid assertions are preserved.
+
+Actual command: `mvn -B clean verify`, with approved Maven cache/Docker access, exited 0. BUILD SUCCESS; 76 tests, 0 failures, 0 errors, 0 skipped. Clean compilation used Java release 25 for 94 production and 16 test source files. Full suite, disposable PostgreSQL 17.11 Testcontainers, Flyway V1–V4, JPA validation, JAR packaging and Spring Boot 3.5.7 repackaging passed. Total time 07:50 min; finished 2026-10-31T19:08:04+01:00. Expected negative migration-test logs, nonfatal JVM/Mockito warnings and cached-pool warnings after container teardown occurred; no test failures. Actual log: target/step6-contract-verify.log; Surefire reports: target/surefire-reports.
+
+`git diff --check` exited 0. `git diff --exit-code -- src/main/resources/db/migration src/main/resources/db/demo/demo.sql pom.xml` exited 0. No migrations, seeds, Step 7, commit or push. Existing unrelated working-tree changes preserved. No database backfill is needed. Esther must consume items in the hazard response; reports is not a supported alias.
+
+Files changed by this correction: src/main/java/com/tesa/ekowatch/report/api/WardHazardsView.java; src/test/java/com/tesa/ekowatch/CollectionRulesTest.java; docs/data-contract.md; docs/engineer-a-handoff.md; docs/engineer-a-verification.md. Historical evidence follows.
+
+---
+# Step 6 verification - 31 October 2026
+
+Implemented only authority/hazard read models and derived disputes. Existing untracked ekobridge-project.zip was preserved. No controllers, authentication, idempotency, seed expansion, background tasks or later steps were added. No shared/live database, reset, .env output, commit, push or deployment was used.
+
+Actual commands/results:
+
+- Initial sandboxed `mvn -B '-Dtest=CollectionRulesTest,PostgresRulesTest,ModuleBoundaryTest' test` could not access C:\.m2\repository: `Access is denied` / `Could not create local repository`. No tests ran on this attempt.
+- Approved-access retry of that command: Maven BUILD SUCCESS, 20 tests, 0 failures/errors/skips (CollectionRulesTest 9, ModuleBoundaryTest 1, PostgresRulesTest 10); 04:00 min, finished 18:49:32 +01:00. Production and test compilation used release 25. The PowerShell redirection invocation returned shell exit 1 due native stderr handling of nonfatal JVM warnings despite Maven's BUILD SUCCESS; the final command below explicitly preserves Maven's exit code.
+- Final `mvn -B '-Dtest=CollectionRulesTest,ResidentReportApiTest,ConfirmationFreshnessTest' verify`: Maven exit 0, BUILD SUCCESS, 29 tests, 0 failures/errors/skips; 02:30 min, finished 18:52:33 +01:00. This recompiles the final added unelapsed-report and independent-range assertions. CollectionRulesTest 9, resident/report privacy tests 10, confirmation/freshness tests 10. JAR packaging and Spring Boot repackaging completed. This is a targeted verify, not a full or clean suite run.
+- `git diff --check`: exit 0. `git diff --exit-code -- pom.xml src/main/resources/db/migration src/main/resources/db/demo/demo.sql`: exit 0. Java 25 and Spring Boot 3.5.7 preserved; V1–V4 unchanged. No DDL/backfill or seed compatibility edits needed.
+
+Database runs used only dynamic disposable postgres:17-alpine Testcontainers (PostgreSQL 17.11), Docker 29.8.0, Testcontainers 1.21.3, Java 25.0.4.1. Flyway V1–V4 and Hibernate ddl-auto=validate initialized. Nonfatal JVM native-access/Mockito dynamic-agent warnings occurred. Logs: target/step6-tests.log and target/step6-final.log; generated Surefire reports under target/surefire-reports. These generated files are not committed artifacts.
+
+New assertions prove overlapping independent transactions in both fact/commit orders, original first-fact IDs preserved, post-commit DISPUTED reads, repeat completion preserves records, exact-date separation, multiple witness reports counting as one disputed occurrence, missed excluding disputes, completed including disputes, historical operator attribution after removing present ward assignment, inclusive 31-day range and invalid ranges/roles/wards, unelapsed occurrences remaining SCHEDULED despite a report, snapshot hazards independent of pickup range, two drains on one street counting twice, flood expiry equality and an hour-later read, no freshness mutation, empty ward zeros/nulls, 105 hazards without truncation, deterministic repeated reads and no private identity/location/performance fields in hazard JSON. Existing schedule/report field allowlists, resident role/privacy, unique confirmations, commit visibility, seed repeatability and module boundaries remain passing. No valid assertion was weakened; old DONE-with-report becomes DISPUTED and the former transitional authority guard assertions now exercise AuthorityApi.
+
+Changed files: authority/api/{AuthorityApi,OperatorPerformanceView,WardDashboardView,package-info}.java; authority/{domain,repository,service,web}/package-info.java and authority/service/AuthorityService.java (replacing dashboard scaffold); report/api/{ReportApi,WardHazardsView}.java; report/service/ReportService.java; collection/service/CollectionService.java; tests CollectionRulesTest, PostgresRulesTest, ModuleBoundaryTest; docs/data-contract.md, docs/engineer-a-handoff.md and this verification document.
+
+Esther must wire canonical APIs through her trusted principal and HTTP layer; actorId is never client JSON. See the Step 6 contract for view fields, ordering, nullable newestReportAt (latest submission across all ward reports), snapshot semantics and canonical rule codes. No HTTP/live-demo, deployment or later-step verification is claimed. Historical verification follows.
+
+---
 # Step 5 verification - 31 October 2026
 
 Only repeat-safe confirmations, canonical confirmation persistence/callers and configurable flood freshness were implemented. Existing uncommitted Step 4 work was preserved; no Step 6 behaviour, shared/live database access, .env value output, database reset, commit, push or deployment. Java 25.0.4.1, Spring Boot 3.5.7, Maven 3.9.16, Testcontainers 1.21.3 and disposable postgres:17-alpine / PostgreSQL 17.11 with Docker 29.8.0. Approved Maven cache/Docker access was used.

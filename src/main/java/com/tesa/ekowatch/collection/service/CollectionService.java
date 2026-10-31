@@ -46,7 +46,7 @@ public class CollectionService implements CollectionApi {
             """,(r,n)-> {
                 Timestamp completed=r.getTimestamp("completed_at");
                 LocalDate date=r.getObject("collection_date",LocalDate.class);
-                CollectionStatus status=completed!=null ? CollectionStatus.DONE :
+                CollectionStatus status=completed!=null ? (r.getLong("missed_report_count")>0 ? CollectionStatus.DISPUTED : CollectionStatus.DONE) :
                         date.isBefore(today) ? CollectionStatus.MISSED : CollectionStatus.SCHEDULED;
                 return new CollectionScheduleView(r.getObject("id",UUID.class),r.getObject("ward_id",UUID.class),
                         r.getObject("street_id",UUID.class),r.getString("name"),date,status,
@@ -83,9 +83,9 @@ public class CollectionService implements CollectionApi {
             insert into collections(id,street_id,collection_date,completed_by,completed_at) values (?,?,?,?,?)
             on conflict on constraint uq_collection_street_date do nothing
             """,UUID.randomUUID(),streetId,collectionDate,actorId,Timestamp.from(now));
-        return db.queryForObject("select id,street_id,collection_date,completed_at from collections where street_id=? and collection_date=?",
+        return db.queryForObject("select c.*, exists(select 1 from reports r where r.street_id=c.street_id and r.collection_date=c.collection_date and r.report_type='MISSED_PICKUP') disputed from collections c where street_id=? and collection_date=?",
             (r,n)->new CollectionView(r.getObject("id",UUID.class),r.getObject("street_id",UUID.class),
-                r.getObject("collection_date",LocalDate.class),r.getTimestamp("completed_at").toInstant(),CollectionStatus.DONE),
+                r.getObject("collection_date",LocalDate.class),r.getTimestamp("completed_at").toInstant(),r.getBoolean("disputed") ? CollectionStatus.DISPUTED : CollectionStatus.DONE),
             streetId,collectionDate);
     }
 }

@@ -1,3 +1,9 @@
+# Step 6 handoff
+
+AuthorityApi.getWardDashboard and ReportApi.listWardHazards are ready for Esther's HTTP integration. WardHazardsView uses items (List<ReportView>) and the items() accessor, as specified by the full-team plan; there is no reports alias. See docs/data-contract.md for signatures, exact views, role/range rules, snapshot semantics and ordering. Supply internal actorId from the trusted principal only. No new controllers/routes were added. Transitional authorityReports was removed. No migration/backfill, seed expansion or stored counters; V1–V4 and stable records remain unchanged. Steps 7–9 remain unimplemented by this change.
+
+---
+
 # Step 5 handoff - confirmations and flood testimony
 
 Verified: focused 25 tests passed; mvn -B clean verify passed all 73 tests with zero failures/errors/skips and packaging at 2026-10-31T14:39:56+01:00. Initial temporary-constraint-name test failure, its correction, exact commands and Step 5 file inventory are preserved in engineer-a-verification.md.
