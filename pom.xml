@@ -88,15 +88,11 @@
       <scope>test</scope>
     </dependency>
 
-<<<<<<< HEAD
     <dependency>
       <groupId>org.springdoc</groupId>
       <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
       <version>2.8.13</version>
     </dependency>
-
-=======
->>>>>>> 7c7f88cf45a4dc5168fdb7f42acb118fe0b28f0b
   </dependencies>
 
   <build>

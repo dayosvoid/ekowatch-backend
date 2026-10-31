@@ -24,7 +24,7 @@ public class ApiExceptionHandler {
         HttpStatus status = switch (code) {
             case "FORBIDDEN" -> HttpStatus.FORBIDDEN;
 
-            case "REPORT_NOT_FOUND" ->
+            case "REPORT_NOT_FOUND", "RESOURCE_NOT_FOUND" ->
                     HttpStatus.NOT_FOUND;
 
             case "DUPLICATE_CONFIRMATION",
@@ -33,7 +33,7 @@ public class ApiExceptionHandler {
                  "SELF_CONFIRMATION" ->
                     HttpStatus.CONFLICT;
 
-            case "INVALID_REPORT",
+            case "VALIDATION_FAILED", "INVALID_REPORT",
                  "INVALID_LOCATION",
                  "INVALID_PAGE",
                  "INVALID_PICKUP",
@@ -121,7 +121,7 @@ public class ApiExceptionHandler {
             case "FORBIDDEN" ->
                     "You are not authorized to perform this action";
 
-            case "REPORT_NOT_FOUND" ->
+            case "REPORT_NOT_FOUND", "RESOURCE_NOT_FOUND" ->
                     "Report was not found";
 
             case "DUPLICATE_CONFIRMATION" ->
@@ -136,7 +136,7 @@ public class ApiExceptionHandler {
             case "SELF_CONFIRMATION" ->
                     "You cannot confirm your own report";
 
-            case "INVALID_REPORT" ->
+            case "VALIDATION_FAILED", "INVALID_REPORT" ->
                     "Invalid report";
 
             case "INVALID_LOCATION" ->
