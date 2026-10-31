@@ -1,3 +1,154 @@
+# Step 9 final handoff to Esther
+
+This section supersedes historical current-versus-target summaries below. Data-layer rules, canonical DTOs and service tests are implemented; HTTP/live integration is not represented as complete. All actorId values below are private UUIDs from a verified principal, never request JSON. UUIDs become strings at HTTP boundaries; instants are UTC; calendar dates use Africa/Lagos. JPA entities, including UserAccount/password_hash, must never be response objects.
+
+## Exact service methods to expose
+
+| Method (parameter types/order) | Return |
+| --- | --- |
+| WardApi.listWards(UUID actorId) | List<WardView> |
+| WardApi.listStreets(UUID actorId, UUID wardId) | List<StreetView> |
+| UserApi.getCurrentUser(UUID actorId) | CurrentUserView |
+| UserApi.updateMyPreferences(UUID actorId, UUID wardId, UUID streetId) | CurrentUserView |
+| ReportApi.createReport(UUID actorId, UUID idempotencyKey, CreateReportRequest request) | ReportView |
+| ReportApi.getReport(UUID actorId, UUID reportId) | ReportView |
+| ReportApi.listReports(UUID actorId, UUID wardId, UUID streetId, ReportType reportType, FloodStatus floodStatus, Integer page, Integer size, ReportSort sort) | Page<ReportView> |
+| ReportApi.listWardHazards(UUID actorId, UUID wardId) | WardHazardsView |
+| ConfirmationApi.confirmReport(UUID actorId, UUID reportId) | ReportView |
+| CollectionApi.listCollectionSchedules(UUID actorId, UUID wardId, LocalDate fromDate, LocalDate toDate) | List<CollectionScheduleView> |
+| CollectionApi.listMyAssignedStreets(UUID actorId, LocalDate fromDate, LocalDate toDate) | List<StreetView> |
+| CollectionApi.recordCollection(UUID actorId, UUID streetId, LocalDate collectionDate) | CollectionView |
+| AuthorityApi.getWardDashboard(UUID actorId, UUID wardId, LocalDate fromDate, LocalDate toDate) | WardDashboardView |
+| PhotoApi.getPhoto(UUID actorId, UUID photoId) | PhotoView |
+
+ReportApi.lockForConfirmation(UUID actorId, UUID reportId, Instant transactionStartedAt) is mandatory-transaction internal module collaboration, NOT an HTTP operation. No old create/get/list/confirm/authorityReports aliases remain in these APIs. No upload orchestration API was added.
+
+## Exact view/request fields
+
+| Type | Fields |
+| --- | --- |
+| CreateReportRequest | reportType, streetId, note, photoId, location, collectionDate. No actor/reporter/ward/key JSON field. |
+| ReportView | reportId, reportType, wardId, streetId, streetName, note, photoUrl, createdAt, collectionDate, confirmationCount, confirmedByMe, lastEvidenceAt, floodStatus, expiresAt, mapLocation, locationPrecision |
+| CollectionScheduleView | scheduleId, wardId, streetId, streetName, collectionDate, collectionStatus, completedAt, missedReportCount |
+| CollectionView | collectionId, streetId, collectionDate, completedAt, collectionStatus |
+| WardHazardsView | wardId, generatedAt, newestReportAt, items (List<ReportView>). No reports alias. |
+| WardDashboardView | wardId, fromDate, toDate, generatedAt, missedPickupCount, disputedPickupCount, blockedDrainCount, currentFloodCount, newestReportAt, operatorPerformance |
+| OperatorPerformanceView | operatorId, operatorName, scheduledPickupCount, completedPickupCount, missedPickupCount, disputedPickupCount |
+| CurrentUserView | userId, email, displayName, role, wardId, streetId (current user's own details only) |
+| WardView | wardId, wardName |
+| StreetView | streetId, wardId, streetName, mapLocation |
+| PhotoView | photoId, photoUrl, contentType, sizeBytes, createdAt |
+| Page<T> | items, page, size, totalElements, totalPages |
+| Location | latitude, longitude; submitted location is private, mapLocation is public street coordinates only |
+
+Counts are long, page indices/sizes/totals of pages are int, IDs are UUID, dates LocalDate and times Instant internally. photoUrl, collectionDate, floodStatus, expiresAt, mapLocation, newestReportAt and uncompleted completedAt can be null where applicable. Public report/schedule/hazard views expose neither private reporter identity/coordinates nor operator performance. locationPrecision is STREET. Role is RESIDENT/OPERATOR/AUTHORITY; ReportType is MISSED_PICKUP/ILLEGAL_DUMPING/BLOCKED_DRAIN/FLOODED_ROAD; FloodStatus is CURRENT/EXPIRED; CollectionStatus is SCHEDULED/DONE/MISSED/DISPUTED; ReportSort is CONFIRMATIONS/NEWEST.
+
+## Integration still required
+
+Esther must verify HTTP authentication, trusted principal extraction, role/ward refusal, malformed UUID/date/header handling and error statuses, including an actual resident/operator HTTP refusal for authority performance. The service-level positive and removed-role-check evidence does not establish HTTP authorization. Map the canonical codes: VALIDATION_FAILED, UNAUTHENTICATED, FORBIDDEN, RESOURCE_NOT_FOUND, WARD_ASSIGNMENT_REQUIRED, SELF_CONFIRMATION_NOT_ALLOWED, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_KEY_REUSED, PHOTO_TOO_LARGE, UNSUPPORTED_PHOTO_TYPE, INTERNAL_ERROR. Existing advice contains older mappings and is not claimed to implement this final mapping.
+
+Parse Idempotency-Key as a UUID outside CreateReportRequest and preserve the same key for the same intended retry. The current controller passes null pending Esther's integration and therefore refuses real creation; do not replace it with a random server key. Protected retries return the original snapshot, not live confirmation/freshness state; after 24 hours reuse is a new intent. Flood confirmations after expiry are deliberate new testimony, not perpetual unattended retries. Service role/ward checks remain necessary even after HTTP checks. Pickup date ranges are inclusive, maximum 31 days; report pagination defaults 0/20, size 1–100; floodStatus requires FLOODED_ROAD; report ordering has stable UUID ties. The one-ward hazard list is complete and untruncated.
+
+The photo adapter must strip metadata, including EXIF/GPS, verify resulting content/size and ownership, and persist only a trusted sanitised storage reference. It must resolve a safe URL without exposing raw keys or private coordinates. No real sanitised demo asset was supplied; all seed photo references remain null and no upload/sanitisation/provider success is claimed. Photo reads are owner-accessible or attached public report evidence according to the service rules.
+
+Demo account markers are not usable credentials. SecurityConfig currently defines BCryptPasswordEncoder; verify the actual runtime configuration and privately provision compatible hashes. No account login or deployed credential wiring has been verified. See demo-provisioning.md for both local opt-ins/production exclusion, explicit fictional anchors, stable UUIDs, preserved user actions and deliberate fresh-database procedure for a new presentation date. Do not reset or automatically seed shared/deployed databases. Frontend empty/error/privacy/freshness/dispute states, final OpenAPI, upload integration, deployed configuration/migrations, end-to-end demo and deployment checks remain the team's work; none was executed here.
+
+## Migration recovery and legacy limits
+
+V1–V5 are preserved; V6 adds five read indexes only, with no data/UUID/status backfill. Regular CREATE INDEX runs transactionally in PostgreSQL and can block writes while building; assess a suitable migration window on the intended environment rather than treating this tiny fixture's timings as production capacity. Never change applied migration checksums, run reset/clean against shared data, or delete Flyway history to force a rerun.
+
+Before a real upgrade, take and verify a restorable backup; rehearse the full chain on a disposable copy with the intended cutover date and explicit operator mapping. V2 preflights incompatible long/untrimmed notes instead of truncating them. V3 requires explicit resolution of ambiguous operator assignments, conflicts and existing missed-report dates. Do not guess the first UUID, discard incompatible notes or reinterpret FAILED history. Coordinate any approved source-data remediation/mapping with the owners before retrying.
+
+On failure, stop dependent writes, retain the exact migration/error evidence and inspect actual schema plus Flyway history. PostgreSQL transactional migrations used here roll back on failure, as the negative preflight tests prove. Verify rollback rather than assume it: deployment interruptions, manual/nontransactional DDL or other engines can leave different states. Flyway Community does NOT automatically undo migrations. Do not run repair automatically; it adjusts metadata, not the database contents. Resolve a diagnosed issue, restore a verified backup when appropriate, or supply a reviewed forward recovery migration; rerun validation and the disposable upgrade rehearsal before a deliberate real retry. No recovery/deployment command was run on shared data in this work.
+
+Legacy weekly schedules and all pickup attempts remain in legacy_collection_schedules/legacy_pickups; FAILED remains history, not a current completion. Completed historical rows keep IDs/times and get only justified prerequisite occurrences. Active weekly expansion covers the documented 30-day cutover horizon, not arbitrary past history; ambiguous data must be mapped explicitly. The fixed Step 8 fictional presentation has its own documented anchors; it is not evidence about real residents or historical operations. Idempotency cannot be backfilled for unknown past client requests. No dispute adjudication, report closure, evidence-history retention workflow or background reconciliation was introduced.
+
+See ADR 001/002 for rejected alternatives, accepted costs and reversal observations, and engineer-a-verification.md for actual commands, plans, migration/mutation evidence and limitations. Prior sections below remain historical.
+
+---
+# Step 8 handoff - deliberate fictional demo provisioning
+
+See [demo-provisioning.md](demo-provisioning.md) for the fixed 31 October presentation, eight-street patterns/identities, counts, guarded local startup, fresh disposable database procedure for a new presentation date, and credential/photo gaps. Both local-demo and ekowatch.demo.enabled=true remain necessary; prod and production always exclude seeding. No guard was weakened and nothing was deployed or seeded against a shared database.
+
+All seed writes are insert-only, with explicit stable dates/times and existing UUIDs retained. They never reset user actions, provision usable passwords or refresh floods. The current repository has a BCryptPasswordEncoder bean; Esther must verify her actual runtime encoder and privately provision compatible demo hashes. Existing disabled markers are not login credentials. No sanitised asset was supplied, so no photo metadata/URL was invented; Esther must sanitise/verify a real asset and deliberately provision/attach its trusted photo reference. These integrations remain explicitly unverified. No migration/backfill or Step 9 work was added. Step 7 principal/Idempotency-Key/error integration remains Esther's responsibility.
+
+---
+# Step 7 handoff - report creation retries
+
+Use `ReportApi.createReport(UUID actorId, UUID idempotencyKey, CreateReportRequest request)`; no keyless overload remains. Supply actorId only from the trusted principal. Parse the Idempotency-Key header into the separate UUID argument; never generate a new key per retry or accept actorId/key in report JSON. The client should retain one UUID for the same intended submission and payload. Missing keys raise IDEMPOTENCY_KEY_REQUIRED; mismatched protected payloads raise IDEMPOTENCY_KEY_REUSED. Esther owns header parsing/validation and final HTTP status/error mapping; none was added here.
+
+The existing ReportController's only change is compile-time adaptation to this signature with null until Esther wires the parsed header. Real create calls currently fail closed with IDEMPOTENCY_KEY_REQUIRED; do not treat mock-based controller tests as header integration evidence. Do not replace null with a server-generated random UUID. Existing GET/list routes are unaffected.
+
+V5 adds idempotency_records only. Existing reports, seed records and UUIDs remain unchanged; no backfill is possible or required for historical requests. Persisted ReportView snapshots are replayed unchanged within 24 hours, including original confirmation/freshness/photo/street fields. New reads can return newer data. At exact expiry reuse is a new intent and can create another report; prior reports remain. The old record is replaced atomically under the same unique user/operation/key tuple. There is no scheduler or automatic deletion promise, and no Step 8 seed expansion. See docs/data-contract.md for schema, canonical hashing, transaction and error semantics.
+
+---
+# Step 6 handoff
+
+AuthorityApi.getWardDashboard and ReportApi.listWardHazards are ready for Esther's HTTP integration. WardHazardsView uses items (List<ReportView>) and the items() accessor, as specified by the full-team plan; there is no reports alias. See docs/data-contract.md for signatures, exact views, role/range rules, snapshot semantics and ordering. Supply internal actorId from the trusted principal only. No new controllers/routes were added. Transitional authorityReports was removed. No migration/backfill, seed expansion or stored counters; V1–V4 and stable records remain unchanged. Steps 7–9 remain unimplemented by this change.
+
+---
+
+# Step 5 handoff - confirmations and flood testimony
+
+Verified: focused 25 tests passed; mvn -B clean verify passed all 73 tests with zero failures/errors/skips and packaging at 2026-10-31T14:39:56+01:00. Initial temporary-constraint-name test failure, its correction, exact commands and Step 5 file inventory are preserved in engineer-a-verification.md.
+
+The current exact contract is the Step 5 section of data-contract.md. V4 renames the confirmation table/columns/unique constraint and associated PK/FK/index names without rewriting data. V1-V3 and the dated-collection cutover remain untouched. Confirmation IDs/timestamps survive migration. New confirmations use report_confirmations / ReportConfirmation / residentId / confirmedAt and the named uq_report_confirmation_resident constraint. Historical migration fixtures retain old names intentionally.
+
+Wire ConfirmationApi.confirmReport(actorId,reportId), returning ReportView; the old confirm method is gone. actorId is private trusted-principal input, never client JSON. The existing controller path is retained, resolves principal through ActorAccess.id, and returns the view after the transaction commits. Self-confirmation uses SELF_CONFIRMATION_NOT_ALLOWED; existing advice maps it to 409. Other service errors are VALIDATION_FAILED, RESOURCE_NOT_FOUND and FORBIDDEN. No controllers/auth/session/login flow or paths were added, and Esther's principal/security implementation is preserved. She still owns final HTTP status/OpenAPI/security integration; CREATED remains the existing transport status for her review.
+
+Each write locks the report FOR UPDATE via a mandatory-transaction report.api collaboration before reading/writing evidence. At READ_COMMITTED, the service captures injected Clock time at entry before waiting. First confirmation inserts a unique resident; current repeats and every non-flood repeat are no-ops. An already-confirmed resident may renew only an expired flood, retaining the original UUID and count and updating only confirmed_at. A concurrent renewal already committed under that report lock prevents a second renewal; a call that began current cannot become fresh testimony simply by waiting past expiry. Legacy status values remain private stored history, do not gate the canonical confirmation operation, and are never transitioned by it.
+
+ekowatch.flood-freshness-hours defaults to 6 (EKOWATCH_FLOOD_FRESHNESS_HOURS override), positive whole hours. Projection/filter/renewal decisions share the same duration. lastEvidenceAt is max(report time, real confirmation timestamps), with strict CURRENT-before/exact-EXPIRED boundary. Non-flood freshness fields are null. Reads do not write, even after a one-hour outage. Response construction/commit failure rolls back evidence; no successful DTO is returned for an aborted operation. A response may become outdated immediately after another resident commits, so it is not a stored perpetual replay snapshot.
+
+A resident submitting again after a later expiry gives fresh testimony, not perpetual replay of an old request. Do not make the client automatically renew expired floods by indefinitely replaying a stale action; get deliberate user testimony. Immediate/lost-response retries while current are safe no-ops, but later expiry is a new evidence window. No confirmation removal, notification, evidence-history table or generic idempotency mechanism was added. Report creation retry protection remains Step 7; disputes and authority projections remain Step 6.
+
+Demo SQL now uses canonical confirmation names and retains fixed IDs, insert-only conflict behaviour, disabled-login hashes and opt-in guards; reruns do not refresh evidence. No final Step 8 expansion. New populated-V1/fresh migration tests verify exact timestamp/UUID preservation, uniqueness/FKs and renamed metadata. Focused PostgreSQL tests cover commit visibility, rollback after a projection failure, configured duration, first/new/renewed evidence, all non-flood repeats, distinct/same-resident races, wait-across-expiry, exact boundaries/outage reads and no GET writes. Existing valid role/authority/unique-person assertions remain; obsolete duplicate-error/OPEN-only workflow expectations are replaced with the requested repeat-safe/history-preservation semantics. Actual commands/results are recorded in engineer-a-verification.md.
+
+No shared/live database was used. An eventual authorised real migration still needs the prior rehearsal/recovery procedure; successful Flyway Community migrations do not auto-undo. No commit/push/deployment. Earlier handoff sections below are historical where superseded.
+
+---
+
+# Step 4 handoff - dated collection cutover
+
+Verified: mvn -B clean verify passed all 58 tests, zero failures/errors/skips, with packaging at 2026-10-31T14:14:19+01:00. The final date-fixture adjustment passed a separate six-test CollectionRulesTest rerun at 14:16:19+01:00. See engineer-a-verification.md for the full command history, file inventory and evidence limits.
+
+V3__dated_collections.sql is the next forward migration; V1/V2 are unchanged. Canonical fields/methods/views are in the current Step 4 section of data-contract.md. Internal actor IDs still come from Esther's verified principal. No Step 5/6 work, new controller, auth flow, schedule-management interface, job, correction workflow, commit or deployment.
+
+## One-time cutover inputs
+
+Flyway placeholders are collectionCutoverDate (default AUTO) and collectionMigrationMapping (default []). Spring configuration maps them from EKOWATCH_COLLECTION_CUTOVER_DATE and EKOWATCH_COLLECTION_MIGRATION_MAPPING. AUTO uses the database transaction's current Africa/Lagos date; an explicit ISO date selects the reviewed cutover boundary. collection_migration_cutover permanently records the chosen date, inclusive horizon end (date+29) and migration timestamp. These are one-time migration inputs, not a way to change schedules after migration. Do not print actual environment values or sensitive mapping data in logs.
+
+Mapping is a JSON array of trusted, operator-approved decisions. A row has streetId and operatorId; optionally collectionDate for an exact occurrence. Example shape (replace placeholders with reviewed UUIDs/dates, not literal values):
+
+```json
+[
+  {"streetId":"<street UUID>","operatorId":"<default operator UUID>"},
+  {"streetId":"<street UUID>","collectionDate":"YYYY-MM-DD","operatorId":"<operator for this date UUID>"}
+]
+```
+
+A street default applies only to active weekly-pattern expansion within the 30-day horizon. An exact date overrides that default. Every chosen operator must have role OPERATOR and a stored assignment to that street's ward. If there is exactly one eligible operator, unmapped weekly occurrences use that unambiguous candidate. Zero/multiple eligible operators without a complete mapping fail preflight; no first UUID is selected. Invalid active ward assignments also fail instead of being silently ignored. Duplicate mappings fail uniqueness checks. Dated mappings outside cutover patterns/completions may create only prerequisite dates for actual existing MISSED_PICKUP reports; unused dated mappings fail. Such historical occurrences must be explicitly verified by the data owner, not inferred from a report's assertion alone.
+
+## Preservation and preflight
+
+The migration locks source tables to prevent concurrent data changes during the transactional cutover. It retains all weekly rows (including inactive) as legacy_collection_schedules and all pickup attempts (including FAILED) as legacy_pickups with their original columns, UUIDs, values and timestamps. The old JPA mappings are removed and current services never query those tables. No history is truncated/discarded.
+
+Only actual COMPLETED attempts backfill collections, keeping their IDs and created_at -> completed_at/recorded_by -> completed_by. Their exact dates get prerequisite schedule rows, using the recorded operator only if current stored role and ward assignment are valid. No other arbitrary historical dates are expanded. Reconstructed schedule IDs are deterministic md5('historical-completion:' + pickup UUID)::uuid, with created_at equal to the legacy completion timestamp; this is not a claim that the original schedule creation time is known. Weekly occurrence IDs are deterministic md5('weekly-occurrence:' + weekly UUID + ':' + ISO date)::uuid, and mapped report occurrences use 'mapped-occurrence:' + street UUID + ':' + ISO date. Every original weekly UUID remains intact in legacy storage.
+
+Active weekly schedules expand only cutover_date through cutover_date+29. If expansion and historical completion overlap, the historical prerequisite keeps its ID/time, and the effective mapped operator must agree. A per-date override can explicitly resolve a differing weekly default; no recorded operator or completion is rewritten. Invalid/future completion dates/roles/ward assignments, conflicting mappings and non-elapsed/missing report occurrences all fail preflight. FAILED attempts remain legacy evidence and never become completions. Current operator_wards has no historical effective dates: validating it cannot prove past assignment history, so any suspected historical changes still need explicit owner-reviewed resolution, not invented history.
+
+Before any later authorised real migration, rehearse on an isolated populated copy: inventory weekly active/inactive patterns, all attempts and timestamps, completed operators' valid roles/wards, wards with multiple/no candidates, existing missed-report dates, explicit mapping coverage and conflicts. Review the cutover date/horizon, verify every mapped historical occurrence, and retain a recovery copy. Ambiguous data must not be guessed, truncated or discarded. We have not inspected or changed a shared/live database. A failed V3 transaction leaves V2/data intact (tested); successful migrations have no automatic Flyway Community undo. An eventual successful-cutover problem requires a reviewed forward fix or separately authorised recovery, not a reset by this code.
+
+## Service and Esther integration
+
+Wire CollectionApi.listCollectionSchedules(actorId,wardId,fromDate,toDate), listMyAssignedStreets(actorId,fromDate,toDate) and recordCollection(actorId,streetId,collectionDate). All ranges are inclusive and at most 31 days. Writes require the scheduled operator plus current ward assignment; repeats return the original record/time. SCHEDULED/DONE/MISSED derive from real rows and injected Clock/Lagos dates. DISPUTED remains Step 6. Report creation now requires an elapsed exact dated occurrence for MISSED_PICKUP, enforced by service and FK/check. Confirmation/flood freshness remains Step 3/5 scope.
+
+The pre-existing collection controller paths remain for Esther to finalise. Its request is now streetId/collectionDate with no status or actor JSON; it returns CollectionView. The authority-only missed read retains its guard and uses ward-scoped canonical schedule views; no new routes/performance query were added. Existing HTTP advice maps WARD_ASSIGNMENT_REQUIRED to 403. Auth/security/principal resolution and login remain Esther's work and were preserved.
+
+DemoSeed guards are unchanged. demo.sql now inserts seven dated occurrences with original reserved UUIDs and an explicit recorded-cutover anchor, without overwriting schedules/completions or refreshing evidence on repeat. The seed's volumes are deliberately not Step 8's final dataset. Existing tests/fixtures now use dated occurrences and elapsed MISSED_PICKUP dates; V1/weekly/FAILED preservation fixtures remain intentionally legacy SQL. Actual test commands/results are in engineer-a-verification.md. Prior handoff sections below are historical where superseded.
+
+---
+
 # Merged integration repair - canonical note contract
 
 Verification: requested PostgresRulesTest passed 10 tests; mvn -B clean verify passed all 41 tests (0 failures/errors/skips), clean compilation and packaging at 2026-10-31T11:53:11+01:00. Full file inventory and actual command evidence are in engineer-a-verification.md.

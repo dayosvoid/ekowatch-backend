@@ -1,3 +1,123 @@
+# Step 9 final data-layer contract
+
+V6__read_projection_indexes.sql is the next forward migration. It adds predicate-aligned indexes only: reports by ward/type/newest order, MISSED_PICKUP by exact street/date, schedules by date/street and operator/date/street, and confirmations by report/latest evidence. No row, UUID, constraint, API field or applied V1–V5 migration is rewritten. There is no backfill. Query-plan evidence uses the fixed fictional seed and PostgreSQL's normal planner settings, with actual output retained in docs/evidence/; tiny-table sequential scans are not reported as a failure or speedup.
+
+OperationLog wraps createReport, confirmReport, recordCollection and getWardDashboard. Fixed operation/outcome events are emitted after transaction completion (committed/rolled_back/unknown); a nontransactional fallback says returned/rejected/failed rather than claiming commit. Existing requestId MDC is retained/restored. No arguments, identities, notes, submitted coordinates, credentials or exception messages enter those events. Existing requestId filtering/log pattern is unchanged.
+
+The former temporary LIKE-table demonstration is replaced by a same-assertion test on actual report_confirmations rows under concurrent direct writes. Normal verification retains production uniqueness/authority role checks. Deliberately failing, opt-in mutations are test-source-only and own fresh disposable PostgreSQL containers; see the verification record for precise commands and actual outcomes. No runtime bypass or production migration weakening is supplied.
+
+The earlier Step 3/4/5 current-versus-target sections below are historical. The Step 6–8 contracts, the method/view inventory and migration recovery in engineer-a-handoff.md, and the two ADRs are the final integration baseline. HTTP authentication/authorisation, Idempotency-Key parsing/error mapping, credentials, photo sanitisation, frontend and deployment remain integration handoffs, not claimed successes.
+
+---
+# Step 8 contract - fixed fictional demo dataset
+
+The local insert-only fixture now supplies one fictional ward, eight streets, four residents, two assigned operators, one authority and one deliberately unassigned operator. It preserves original seed UUIDs. Explicit presentation anchor: 2026-10-31T12:00:00Z. Coverage: 2026-10-16 through 2026-11-14, with daily and weekday patterns, 172 dated occurrences, three completions, all four report types (nine reports) and five confirmations. Runtime status/freshness is derived from rows and Clock; timestamps never renew on a rerun. No new migration is needed; V1–V5 are unchanged.
+
+Both local-demo and ekowatch.demo.enabled=true remain required, and prod/production exclude the runner. The runner also checks these conditions on invocation. All names, activity and evidence are fictional. All photo references remain null because no sanitised asset was supplied; credentials remain deliberately unusable until Esther provisions compatible hashes. Existing rows/actions, including preferences, hashes, report edits and confirmation times, are never overwritten. Fresh-database counts and the deliberate new-presentation provisioning procedure are documented in docs/demo-provisioning.md. Historical current-status statements below are superseded only for Step 8 seed scope.
+
+---
+# Step 7 contract - report creation idempotency
+
+This section supersedes earlier current-status statements for report creation. The only signature is `ReportView ReportApi.createReport(UUID actorId, UUID idempotencyKey, CreateReportRequest request)`. actorId comes from the trusted principal. The UUID key is a separate internal argument, never a CreateReportRequest/JSON field. No keyless overload or alias exists. All direct service callers now supply an explicit key per new intent.
+
+V5__report_creation_idempotency.sql adds report-owned idempotency_records and its JPA validation mapping. Columns: id (UUID primary key), user_id (UUID FK users), operation (varchar(40), currently only createReport), idempotency_key (UUID), request_hash (64 lowercase SHA-256 hex characters), report_id (UUID FK reports), response_payload (JSONB object containing the original ReportView), created_at and expires_at (UTC instants). All are required. uq_idempotency_user_operation_key uniquely protects (user_id,operation,idempotency_key); expires_at must equal created_at plus 24 hours. No historical reports/UUIDs are rewritten and no historical keys are fabricated. Existing insert-only seeds need no change; Step 8 expansion remains outstanding.
+
+RESIDENT role and required key are checked in the service; missing key raises IDEMPOTENCY_KEY_REQUIRED. Pure request validation precedes hashing. Hash encoding is fixed and versioned: ordered fields createReport:v1, reportType.name, canonical UUID streetId, trimmed note, nullable UUID photoId, nullable latitude, nullable longitude, nullable ISO collectionDate. Each non-null field is UTF-8 with a four-byte big-endian byte-length prefix; null is length -1. Finite doubles use Double.toString with signed zero normalized to 0.0. SHA-256 covers those bytes, independent of object identity, map iteration or JSON mapper configuration. Raw submitted coordinates never enter the stored public response. New intents still enforce stored street/ward, photo ownership and elapsed dated-schedule rules.
+
+Within READ COMMITTED, a report-specific PostgreSQL transaction advisory lock serializes the user/createReport/key tuple (hash collisions can only serialize extra work). The unique tuple remains the persistent identity check. The service reads the locked record, sampling Clock after advisory-lock acquisition. While now is strictly before expires_at, equal validated hashes return the original persisted ReportView; different hashes raise IDEMPOTENCY_KEY_REUSED. A replay does not resolve photos or requery live report projections, and never silently replaces the original snapshot with updated confirmations, expiry status, street coordinates/name or photo URL. Current role is still checked on every call.
+
+A new intent inserts the report, projects and serializes its completed response, and inserts the record in one transaction. INSERT ON CONFLICT only replaces an expired record; a protected conflict rolls back the new report. No uniqueness exception is caught and followed by SQL in an aborted transaction. Projection, serialization, persistence or outer-transaction failure rolls back all work. Callers receive the response only after the service transaction commits.
+
+At now >= expires_at the key begins a new intent, even with a different payload, under the same lock/unique constraint. The record's ID and unique tuple remain stable while hash/report/response/timestamps are replaced. Earlier report rows and UUIDs remain intact. Replay protection ends after 24 hours; a retry after that window can create another report. Expired rows are retained until reused; there is no cleanup scheduler or promise of automatic data deletion at 24 hours. Idempotency applies only to report creation.
+
+Esther owns HTTP Idempotency-Key parsing/UUID validation and error mapping (IDEMPOTENCY_KEY_REQUIRED and IDEMPOTENCY_KEY_REUSED). No header parsing, routes, security or HTTP exception mapping was added. The existing ReportController call is adapted to the required signature with an explicit null key until Esther supplies her parsed header; it therefore refuses real create calls with IDEMPOTENCY_KEY_REQUIRED instead of inventing a random key. Existing controller tests remain adapter/mock checks, not a claim of a working header-integrated create endpoint. Esther must finish that integration before enabling report creation through HTTP.
+
+---
+# Step 6 contract — authority, hazards and derived disputes
+
+This section supersedes earlier current-status statements for Step 6. No schema migration is required; V1–V4 and existing records/UUIDs are unchanged. Demo fixtures remain compatible and insert-only; expansion remains Step 8.
+
+`AuthorityApi.getWardDashboard(UUID actorId, UUID wardId, LocalDate fromDate, LocalDate toDate)` returns `WardDashboardView`, with exactly the build.md fields and long counts. AUTHORITY is enforced in the service. The inclusive range must contain 1–31 days. `operatorPerformance` contains only operators with dated occurrences in that range, ordered by display name then UUID. Attribution uses the occurrence's operator_id regardless of later ward assignment changes. Completed counts include disputed completions; missed counts include only elapsed uncompleted occurrences; disputed counts count occurrences, not witness reports. Today is Africa/Lagos.
+
+`ReportApi.listWardHazards(UUID actorId, UUID wardId)` requires an existing user and ward. `WardHazardsView` fields are wardId, generatedAt, newestReportAt and items (`List<ReportView>`). The list is unpaginated and untruncated, contains blocked-drain reports and CURRENT flood reports, ordered by createdAt descending then reportId ascending. It uses the existing private ReportView projection and street coordinates only. No performance fields appear in normal views.
+
+For both reads, newestReportAt is max(created_at) across **all reports in the ward**, nullable for no reports. It is a submission timestamp, not lastEvidenceAt. Hazard counts/list are a snapshot at generatedAt, independent of the pickup date range; count reports, not streets. Freshness uses the same configured hours and strict expiry boundary as report reads. A repeatable-read transaction and one captured Clock instant keep the response internally consistent. No read writes counters or changes facts.
+
+DISPUTED is derived only from completion plus MISSED_PICKUP for the exact street/date. Schedule reads and repeat completion responses reflect it. An uncompleted occurrence stays SCHEDULED until elapsed even when a report exists. Both original facts and timestamps survive. Concurrent responses may precede the other transaction's commit; subsequent reads derive the combined committed facts. No dispute resolution workflow exists.
+
+The transitional ReportApi.authorityReports operation is removed; its valid authority-role tests now exercise AuthorityApi. Esther must expose the new service methods through her principal, parsing, authorization and HTTP mapping layer; actorId never comes from JSON. No controllers or HTTP routes were added.
+
+---
+# Step 5 contract - repeat-safe confirmation and flood freshness
+
+Current schema is V4__report_confirmations.sql. Earlier sections below are historical where superseded. V1/V2/V3 are unchanged, including the Step 4 cutover. V4 performs metadata-only renames, with no row insert/delete/update: confirmations -> report_confirmations; user_id -> resident_id; created_at -> confirmed_at; unique constraint -> uq_report_confirmation_resident(report_id,resident_id). PK/FK constraint names and the resident lookup index are renamed consistently. All confirmation UUIDs, values, timestamps, defaults, nullability, uniqueness and FKs survive.
+
+report_confirmations maps to confirmation.domain.ReportConfirmation: id -> id UUID; report_id -> reportId UUID; resident_id -> residentId UUID; confirmed_at -> confirmedAt Instant. The old Confirmation entity is removed. Services, demo SQL and active fixtures use only the canonical names. Intentional pre-V4 migration fixtures and old migration scripts retain the historical names.
+
+```java
+ReportView ConfirmationApi.confirmReport(UUID actorId, UUID reportId)
+// report.api collaboration only, requires an existing transaction; never an HTTP operation:
+ReportView ReportApi.lockForConfirmation(UUID actorId, UUID reportId, Instant transactionStartedAt)
+```
+
+actorId is private verified-principal input, never client JSON. transactionStartedAt is private server Clock input supplied by ConfirmationService. No confirm/requireConfirmable aliases remain. Stored RESIDENT role and a different reporter are required. Null report IDs fail VALIDATION_FAILED, unknown reports RESOURCE_NOT_FOUND, invalid actor/role FORBIDDEN, and self-confirmation SELF_CONFIRMATION_NOT_ALLOWED. Legacy report status/updated_at remain stored and unchanged; the old OPEN-only confirmation workflow no longer governs the canonical MVP operation. No resolution transitions are added or exposed.
+
+ConfirmationService enters a READ_COMMITTED transaction and captures its Clock instant before role/lock waits, truncated to PostgreSQL microseconds. It obtains the report row FOR UPDATE through report.api, then reads committed evidence under that lock. The collaboration method uses MANDATORY transaction propagation so the lock cannot be acquired/released in a separate transaction before the writer. Every confirmation service evidence write takes the same report lock first. Different residents' writes serialize on one report, trading per-report write parallelism for a consistent renewal decision. No module imports another module's internal packages.
+
+First evidence inserts one UUID row using the named unique constraint and explicit confirmedAt from the captured instant. If that resident already has a row, non-flood repeats always do nothing; flood repeats do nothing while current at transaction entry. Only a FLOODED_ROAD already expired at that entry instant can update that resident's confirmed_at. UUID and resident count do not change. A renewal committed by a writer ahead of a waiting transaction is visible after the lock and prevents another renewal. If a call began current and waited until after expiry, it remains a no-op, though its returned read can correctly be EXPIRED. New residents can insert their first evidence after expiry and increase the distinct-person count normally.
+
+The response is the authoritative full canonical ReportView, read from real rows after the operation's writes under the same lock. The Spring transaction interceptor commits before the caller receives the DTO; commit/projection failure propagates instead of returning success. This is a snapshot at that operation's serialization point, not a promise that another resident cannot commit immediately afterward. The API does not return an entity, reporter identity, legacy lifecycle state or precise submitted location.
+
+Config property ekowatch.flood-freshness-hours defaults to 6, optionally supplied by EKOWATCH_FLOOD_FRESHNESS_HOURS; values must be positive whole hours. ReportService uses one configured Duration for both projection expiry and SQL filter cutoffs, and the locked projection gives ConfirmationService the same policy. lastEvidenceAt = max(report.created_at, report_confirmations.confirmed_at). FLOODED_ROAD expiresAt = lastEvidenceAt + duration; CURRENT iff operation time is strictly before expiresAt, otherwise EXPIRED. Non-flood floodStatus/expiresAt are null, while lastEvidenceAt still uses actual stored evidence. Ordinary GET/list never write or refresh timestamps, including during/after an outage. No jobs/counters/evidence-history table are added.
+
+A later submission after a later expiry is fresh testimony, not perpetual replay of the original request. The same resident still counts once, but deliberately attests again with a new evidence time. The server does not replay an old confirmation response forever or renew on reads. Esther's client integration must treat a post-expiry confirmation as a deliberate new attestation, rather than an unattended loop retrying an old action across repeated expiries. Report-creation idempotency remains Step 7 and is not introduced here.
+
+Existing ConfirmationController path /api/reports/{reportId}/confirm is retained and still obtains actorId from ActorAccess.id(Authentication). It now calls confirmReport and returns ReportView after commit. Existing CREATED status is retained for Esther's HTTP review; self-confirmation is mapped through existing advice to 409 with the canonical code. No new controller, route, auth flow or OpenAPI paths were added. Seed volumes/IDs stay the same and insert-only reruns do not refresh confirmed_at; final seed expansion remains Step 8. No Step 6 disputes/metrics were implemented.
+
+---
+
+# Step 4 contract - dated schedules and completion facts
+
+Current data schema is V3__dated_collections.sql after unchanged V1/V2. Earlier sections below are historical where superseded. No Step 5 confirmations or Step 6 disputes/metrics have been implemented.
+
+| Storage/entity | Exact columns -> Java members |
+| --- | --- |
+| collection_schedules / CollectionSchedule | id -> id UUID; street_id -> streetId UUID FK streets; operator_id -> operatorId UUID FK users; collection_date -> collectionDate LocalDate; created_at -> createdAt Instant |
+| collections / CollectionRecord | id -> id UUID; street_id -> streetId UUID FK streets; collection_date -> collectionDate LocalDate; completed_by -> completedBy UUID FK users; completed_at -> completedAt Instant |
+| legacy_collection_schedules | Original weekly rows, IDs, active flags, weekday values and constraints retained; no JPA mapping/current application queries |
+| legacy_pickups | Every original COMPLETED/FAILED attempt, ID, recorded_by and created_at retained; no JPA mapping/current application queries |
+| collection_migration_cutover | Internal migration audit: id=1, cutover_date, horizon_end_date, recorded_at; not a product DTO/API |
+
+Named uniqueness: uq_schedule_street_date(street_id,collection_date), uq_collection_street_date(street_id,collection_date). collections and reports have composite street/date FKs to collection_schedules. Report street/ward integrity remains. Database checks forbid future completion dates and require MISSED_PICKUP dates to be strictly before the database's Lagos today; V2 still requires dates exactly for MISSED_PICKUP. No lifecycle/history column was removed. Pickup entity and old weekly mapping were removed; no status is stored in collections.
+
+```java
+List<CollectionScheduleView> CollectionApi.listCollectionSchedules(
+    UUID actorId, UUID wardId, LocalDate fromDate, LocalDate toDate)
+List<StreetView> CollectionApi.listMyAssignedStreets(
+    UUID actorId, LocalDate fromDate, LocalDate toDate)
+CollectionView CollectionApi.recordCollection(
+    UUID actorId, UUID streetId, LocalDate collectionDate)
+```
+
+actorId is private verified-principal input, never client JSON. listCollectionSchedules requires a stored user and existing explicit ward, scopes every row to it, and orders collectionDate, streetName, streetId, scheduleId. Dates are inclusive, required, ordered, at most 31 days. listMyAssignedStreets requires OPERATOR, returns distinct streets from that operator's dated assignments in range and still-valid ward assignments, ordered name/UUID; no assignments yields an empty list. Neither read exposes operator performance or submitted report coordinates.
+
+recordCollection requires OPERATOR, current ward assignment, the actor recorded as operator_id on that street/date occurrence, and a date no later than injected-Clock Lagos today. Invalid/null/future/unscheduled dates use VALIDATION_FAILED, unknown street RESOURCE_NOT_FOUND, missing ward assignment WARD_ASSIGNMENT_REQUIRED, and wrong role/scheduled operator FORBIDDEN. Insert-on-conflict runs at READ_COMMITTED and returns the committed original ID/timestamp on repeat without rewriting. completedBy is the trusted actor; completedAt is injected Clock time at PostgreSQL microsecond precision. There is no FAILED input, correction flow or old recordPickup/missed service alias.
+
+| View | Exact members |
+| --- | --- |
+| CollectionScheduleView | UUID scheduleId, UUID wardId, UUID streetId, String streetName, LocalDate collectionDate, CollectionStatus collectionStatus, Instant completedAt, long missedReportCount |
+| CollectionView | UUID collectionId, UUID streetId, LocalDate collectionDate, Instant completedAt, CollectionStatus collectionStatus |
+
+CollectionStatus has only SCHEDULED, DONE, MISSED, DISPUTED. This step returns SCHEDULED for today/future without completion, MISSED for elapsed dates without completion, DONE when completion exists. DISPUTED is reserved for Step 6; a missed report does not change these states yet. completedAt is null on uncompleted schedule views; recordCollection returns a completed CollectionView with a non-null ID/time. missedReportCount counts actual MISSED_PICKUP reports for the exact street/date, independent of confirmations. Reads use injected Clock and Africa/Lagos; GET never writes state or counters.
+
+ReportService validates MISSED_PICKUP through collection.api.listCollectionSchedules for the exact street/date and requires it elapsed; the database FK/check protects direct writes too. Reports can still disagree with an existing completion: both facts are kept for Step 6. No photo, confirmation or report-freshness semantics changed.
+
+Existing CollectionController was adapted in place, retaining Esther's /api/pickups and /api/authority/missed-pickups paths for her integration review. The completion request now has streetId and collectionDate only, returns CollectionView and obtains actorId via ActorAccess.id(Authentication). The existing authority read keeps its AUTHORITY guard, requires wardId, and filters canonical schedule views to MISSED; no dashboard/performance query was added. These transport paths are not old service aliases. No new controller/routes were introduced; Esther owns final path/status/OpenAPI decisions and wiring of the new listing APIs. WARD_ASSIGNMENT_REQUIRED is mapped to 403 by the existing advice.
+
+Migration inputs, history preservation, cutover and explicit-mapping procedure are documented in engineer-a-handoff.md. Seed compatibility remains seven stable dated occurrences anchored at cutover_date-1 through cutover_date+5, fixed original demo UUIDs, insert-only. No final Step 8 expansion or credential/photo provisioning was added.
+
+---
+
 # Merged HTTP integration note
 
 The Steps 2-3 contract below has been restored from dayo/data-rules without old service aliases. Esther's existing ReportController now consumes the shared CreateReportRequest.note and calls createReport/getReport/listReports using ActorAccess.id(Authentication). Its existing paths remain; listing uses required wardId, optional streetId/reportType/floodStatus, page/size defaults 0/20 and CONFIRMATIONS default sorting, returning Page<ReportView>. The current handler recognizes the canonical validation/not-found service codes. Authentication and principal-resolution implementation are preserved. The no-controller statements in earlier historical data-only steps describe their original scope, not the merged application's current state.
@@ -155,7 +275,7 @@ Remove current reporterId, status and updatedAt from ReportView. Never expose re
 | CollectionView | collectionId (collections.id UUID), streetId (street_id UUID), collectionDate (collection_date LocalDate), completedAt (completed_at nullable Instant when no completion), collectionStatus (derived CollectionStatus). build.md does not specify collectionId nullability for an uncompleted occurrence; settle when implementing the view. |
 | WardDashboardView | wardId (UUID), fromDate (LocalDate), toDate (LocalDate), generatedAt (Instant), missedPickupCount (integral), disputedPickupCount (integral), blockedDrainCount (integral), currentFloodCount (integral), newestReportAt (nullable Instant), operatorPerformance (OperatorPerformanceView collection). |
 | OperatorPerformanceView | operatorId (schedule operator_id UUID), operatorName (users.display_name String), scheduledPickupCount, completedPickupCount, missedPickupCount, disputedPickupCount (all integral). |
-| WardHazardsView | CURRENT flood and BLOCKED_DRAIN report views, generatedAt (Instant), nullable newestReportAt (Instant). build.md does not enumerate the report-list member name or any additional fields; no invented full shape is binding. No silent truncation of one ward. |
+| WardHazardsView | CURRENT flood and BLOCKED_DRAIN report views, generatedAt (Instant), nullable newestReportAt (Instant). The full-team plan specifies items (`List<ReportView>`) as the report-list member; no reports alias exists. No silent truncation of one ward. |
 | Page<T> | items (T collection), page (int), size (int), totalElements (integral), totalPages (int). |
 | CurrentUserView, WardView, StreetView, PhotoView | Required exact type names; build.md does not enumerate full fields. Bind only required stored preference/ward/street and authorised photo information in their owning steps. Never expose passwordHash, raw storage keys, or private reporter identity. |
 

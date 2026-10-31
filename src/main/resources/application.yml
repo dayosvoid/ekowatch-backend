@@ -15,9 +15,15 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+    placeholders:
+      collectionCutoverDate: '${EKOWATCH_COLLECTION_CUTOVER_DATE:AUTO}'
+      collectionMigrationMapping: '${EKOWATCH_COLLECTION_MIGRATION_MAPPING:[]}'
 
 server:
   port: ${PORT:8081}
 logging:
   pattern:
     level: '%5p [requestId=%X{requestId:-}]'
+
+ekowatch:
+  flood-freshness-hours: ${EKOWATCH_FLOOD_FRESHNESS_HOURS:6}

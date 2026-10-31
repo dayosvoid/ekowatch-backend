@@ -75,11 +75,13 @@ class ResidentReportApiTest {
         street=UUID.randomUUID(); secondStreet=UUID.randomUUID(); otherStreet=UUID.randomUUID();
         db.update("insert into streets(id,ward_id,name,latitude,longitude) values (?,?,'Palm Street',6.5,3.4)",street,ward);
         db.update("insert into streets(id,ward_id,name) values (?,?,'No map street'),(?,?,'Other ward street')",secondStreet,ward,otherStreet,otherWard);
+        db.update("insert into operator_wards values (?,?)",operator,ward);
+        db.update("insert into collection_schedules(id,street_id,operator_id,collection_date) values (?,?,?,cast('2026-10-30' as date))",UUID.randomUUID(),street,operator);
     }
     CreateReportRequest request(ReportType type,UUID streetId,String note) {
         return new CreateReportRequest(type,streetId,note,null,null,type==ReportType.MISSED_PICKUP ? LocalDate.of(2026,10,30) : null);
     }
-    ReportView create(ReportType type) { return reports.createReport(resident,request(type,street,"Evidence")); }
+    ReportView create(ReportType type) { return reports.createReport(resident,UUID.randomUUID(),request(type,street,"Evidence")); }
     Page<ReportView> list(UUID streetId, ReportType type, FloodStatus floodStatus, Integer page, Integer size, ReportSort sort) {
         return reports.listReports(other,ward,streetId,type,floodStatus,page,size,sort);
     }
@@ -87,7 +89,7 @@ class ResidentReportApiTest {
         assertEquals(code,assertThrows(RuleViolation.class,action).code());
     }
     void evidence(UUID reportId,UUID actorId,Instant at) {
-        db.update("insert into confirmations(id,report_id,user_id,created_at) values (?,?,?,?)",UUID.randomUUID(),reportId,actorId,Timestamp.from(at));
+        db.update("insert into report_confirmations(id,report_id,resident_id,confirmed_at) values (?,?,?,?)",UUID.randomUUID(),reportId,actorId,Timestamp.from(at));
     }
     UUID photo(UUID owner) {
         UUID id=UUID.randomUUID();
@@ -105,7 +107,7 @@ class ResidentReportApiTest {
         for (ReportType type:ReportType.values()) {
             var request=new CreateReportRequest(type,street,"  Evidence  ",null,new Location(7.123456,4.987654),
                     type==ReportType.MISSED_PICKUP ? LocalDate.of(2026,10,30) : null);
-            var view=reports.createReport(resident,request);
+            var view=reports.createReport(resident,UUID.randomUUID(),request);
             assertEquals(type,view.reportType()); assertEquals(ward,view.wardId()); assertEquals(street,view.streetId());
             assertEquals("Palm Street",view.streetName()); assertEquals("Evidence",view.note()); assertEquals(NOW,view.createdAt());
             assertEquals(request.collectionDate(),view.collectionDate());
@@ -121,29 +123,29 @@ class ResidentReportApiTest {
                 assertEquals(FloodStatus.CURRENT,view.floodStatus()); assertEquals(NOW.plusSeconds(21600),view.expiresAt());
             } else { assertNull(view.floodStatus()); assertNull(view.expiresAt()); }
         }
-        var noLocation=reports.createReport(resident,request(ReportType.BLOCKED_DRAIN,secondStreet,"No submitted location"));
+        var noLocation=reports.createReport(resident,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,secondStreet,"No submitted location"));
         assertNull(noLocation.mapLocation()); assertNull(noLocation.photoUrl());
         assertNull(db.queryForObject("select latitude from reports where id=?",Double.class,noLocation.reportId()));
     }
 
     @Test void serviceRejectsInvalidInputsAndWrongRolesWithoutPartialWrites() {
         long before=db.queryForObject("select count(*) from reports",Long.class);
-        violation("FORBIDDEN",()->reports.createReport(operator,request(ReportType.BLOCKED_DRAIN,street,"Drain")));
-        violation("FORBIDDEN",()->reports.createReport(authority,request(ReportType.BLOCKED_DRAIN,street,"Drain")));
-        violation("FORBIDDEN",()->reports.createReport(UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,street,"Drain")));
-        violation("FORBIDDEN",()->reports.createReport(null,request(ReportType.BLOCKED_DRAIN,street,"Drain")));
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,null));
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(null,street,"Drain",null,null,null)));
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,request(ReportType.BLOCKED_DRAIN,null,"Drain")));
+        violation("FORBIDDEN",()->reports.createReport(operator,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,street,"Drain")));
+        violation("FORBIDDEN",()->reports.createReport(authority,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,street,"Drain")));
+        violation("FORBIDDEN",()->reports.createReport(UUID.randomUUID(),UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,street,"Drain")));
+        violation("FORBIDDEN",()->reports.createReport(null,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,street,"Drain")));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),null));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(null,street,"Drain",null,null,null)));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,null,"Drain")));
         for(String note:Arrays.asList(null,"","  ","x".repeat(1001)))
-            violation("VALIDATION_FAILED",()->reports.createReport(resident,request(ReportType.BLOCKED_DRAIN,street,note)));
-        violation("RESOURCE_NOT_FOUND",()->reports.createReport(resident,request(ReportType.BLOCKED_DRAIN,UUID.randomUUID(),"Drain")));
+            violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,street,note)));
+        violation("RESOURCE_NOT_FOUND",()->reports.createReport(resident,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,UUID.randomUUID(),"Drain")));
         for(Location bad:List.of(new Location(null,3.0),new Location(6.0,null),new Location(null,null),new Location(91.0,0.0),
                 new Location(-91.0,0.0),new Location(0.0,181.0),new Location(0.0,-181.0),new Location(Double.NaN,0.0),new Location(0.0,Double.POSITIVE_INFINITY)))
-            violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(ReportType.FLOODED_ROAD,street,"Flood",null,bad,null)));
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,null)));
+            violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.FLOODED_ROAD,street,"Flood",null,bad,null)));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,null)));
         for(ReportType type:List.of(ReportType.BLOCKED_DRAIN,ReportType.ILLEGAL_DUMPING,ReportType.FLOODED_ROAD))
-            violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(type,street,"Evidence",null,null,LocalDate.of(2026,10,30))));
+            violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(type,street,"Evidence",null,null,LocalDate.of(2026,10,30))));
         assertEquals(before,db.queryForObject("select count(*) from reports",Long.class));
         violation("RESOURCE_NOT_FOUND",()->reports.getReport(other,UUID.randomUUID()));
         violation("VALIDATION_FAILED",()->reports.getReport(other,null));
@@ -181,10 +183,10 @@ class ResidentReportApiTest {
         UUID ownPhoto=photo(resident),foreignPhoto=photo(other);
         violation("RESOURCE_NOT_FOUND",()->photos.getPhoto(other,ownPhoto));
         long before=db.queryForObject("select count(*) from reports",Long.class);
-        violation("FORBIDDEN",()->reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",foreignPhoto,null,null)));
-        violation("RESOURCE_NOT_FOUND",()->reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",UUID.randomUUID(),null,null)));
+        violation("FORBIDDEN",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",foreignPhoto,null,null)));
+        violation("RESOURCE_NOT_FOUND",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",UUID.randomUUID(),null,null)));
         assertEquals(before,db.queryForObject("select count(*) from reports",Long.class));
-        var view=reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",ownPhoto,null,null));
+        var view=reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",ownPhoto,null,null));
         assertEquals(ownPhoto,db.queryForObject("select photo_id from reports where id=?",UUID.class,view.reportId()));
         assertEquals("https://example.invalid/test-only-asset",view.photoUrl());
         assertEquals(view.photoUrl(),reports.getReport(other,view.reportId()).photoUrl());
@@ -192,13 +194,13 @@ class ResidentReportApiTest {
         assertFalse(fields(photos.getPhoto(other,ownPhoto)).contains("storageKey"));
         assertFalse(fields(photos.getPhoto(other,ownPhoto)).contains("ownerId"));
         // A resolvable public attachment is still not owned by another resident.
-        violation("FORBIDDEN",()->reports.createReport(other,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",ownPhoto,null,null)));
+        violation("FORBIDDEN",()->reports.createReport(other,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",ownPhoto,null,null)));
         db.update("update photos set storage_key='unresolved-test-reference' where id=?",ownPhoto);
         assertNull(reports.getReport(other,view.reportId()).photoUrl());
     }
 
     @Test void reportAndRequestSerializationHaveOnlyCanonicalPublicFields() {
-        var view=reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",null,new Location(7.123456,4.987654),null));
+        var view=reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",null,new Location(7.123456,4.987654),null));
         assertEquals(Set.of("reportId","reportType","wardId","streetId","streetName","note","photoUrl","createdAt","collectionDate",
                 "confirmationCount","confirmedByMe","lastEvidenceAt","floodStatus","expiresAt","mapLocation","locationPrecision"),fields(view));
         assertEquals(Set.of("reportType","streetId","note","photoId","location","collectionDate"),fields(request(ReportType.BLOCKED_DRAIN,street,"Drain")));
@@ -225,7 +227,7 @@ class ResidentReportApiTest {
         assertEquals(NOW.minusSeconds(3600),read.lastEvidenceAt()); assertEquals(NOW.plusSeconds(5*3600),read.expiresAt());
         assertEquals(FloodStatus.CURRENT,read.floodStatus());
         var storedBefore=db.queryForMap("select * from reports where id=?",flood.reportId());
-        var confirmationsBefore=db.queryForList("select * from confirmations where report_id=? order by id",flood.reportId());
+        var confirmationsBefore=db.queryForList("select * from report_confirmations where report_id=? order by id",flood.reportId());
         clock.set(read.expiresAt().minusNanos(1));
         assertEquals(FloodStatus.CURRENT,reports.getReport(other,flood.reportId()).floodStatus());
         assertEquals(1,list(null,ReportType.FLOODED_ROAD,FloodStatus.CURRENT,0,20,null).totalElements());
@@ -235,14 +237,14 @@ class ResidentReportApiTest {
         clock.set(read.expiresAt().plusSeconds(3600));
         assertEquals(FloodStatus.EXPIRED,reports.getReport(other,flood.reportId()).floodStatus());
         assertEquals(storedBefore,db.queryForMap("select * from reports where id=?",flood.reportId()));
-        assertEquals(confirmationsBefore,db.queryForList("select * from confirmations where report_id=? order by id",flood.reportId()));
+        assertEquals(confirmationsBefore,db.queryForList("select * from report_confirmations where report_id=? order by id",flood.reportId()));
     }
 
     @Test void wardFiltersCountsPaginationAndOrderingAreDeterministic() {
         var first=create(ReportType.BLOCKED_DRAIN);
         clock.set(NOW.plusSeconds(1)); var second=create(ReportType.ILLEGAL_DUMPING);
-        clock.set(NOW.plusSeconds(2)); var thirdReport=reports.createReport(resident,request(ReportType.BLOCKED_DRAIN,secondStreet,"Third"));
-        reports.createReport(resident,request(ReportType.FLOODED_ROAD,otherStreet,"Different ward"));
+        clock.set(NOW.plusSeconds(2)); var thirdReport=reports.createReport(resident,UUID.randomUUID(),request(ReportType.BLOCKED_DRAIN,secondStreet,"Third"));
+        reports.createReport(resident,UUID.randomUUID(),request(ReportType.FLOODED_ROAD,otherStreet,"Different ward"));
         evidence(first.reportId(),other,NOW); evidence(first.reportId(),third,NOW);
         evidence(second.reportId(),other,NOW);
         var defaults=list(null,null,null,null,null,null);

@@ -24,7 +24,8 @@ public class ReportController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public ReportView create(Authentication authentication, @Valid @RequestBody CreateReportRequest request) {
-        return reports.createReport(actors.id(authentication), request);
+        // Esther must supply the parsed Idempotency-Key; no key is invented by this adapter.
+        return reports.createReport(actors.id(authentication), null, request);
     }
 
     @GetMapping("/{reportId}")
