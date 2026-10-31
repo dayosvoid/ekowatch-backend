@@ -9,7 +9,7 @@ class ModuleBoundaryTest {
     @Test
     void modulesDoNotAccessOtherModulesInternals() {
         JavaClasses classes = new ClassFileImporter().importPackages("com.tesa.ekowatch");
-        String[] modules = {"auth", "user", "ward", "collection", "report", "confirmation", "dashboard", "photo"};
+        String[] modules = {"auth", "user", "ward", "collection", "report", "confirmation", "authority", "photo"};
         for (String source : modules)
             for (String target : modules)
                 if (!source.equals(target)) {

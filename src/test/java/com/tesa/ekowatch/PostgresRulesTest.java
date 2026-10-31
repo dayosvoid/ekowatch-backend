@@ -47,6 +47,7 @@ class PostgresRulesTest {
     CollectionApi collections;
     @Autowired
     DataSource source;
+    @Autowired com.tesa.ekowatch.authority.api.AuthorityApi authorities;
     UUID reporter, a, b, authority, operator, ward, street, report;
 
     UUID user(String role) {
@@ -156,8 +157,8 @@ class PostgresRulesTest {
         var historyBefore = db.queryForMap("select status,updated_at from reports where id=?", report);
         assertEquals(1, confirmations.confirmReport(a, report).confirmationCount());
         assertEquals(historyBefore, db.queryForMap("select status,updated_at from reports where id=?", report));
-        violation("FORBIDDEN", () -> reports.authorityReports(a, 10, 0));
-        assertEquals(1, reports.authorityReports(authority, 10, 0).size());
+        violation("FORBIDDEN", () -> authorities.getWardDashboard(a, ward, LocalDate.now(), LocalDate.now()));
+        assertEquals(1, authorities.getWardDashboard(authority, ward, LocalDate.now(), LocalDate.now()).blockedDrainCount());
         violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, " ", null, null, null)));
         violation("RESOURCE_NOT_FOUND", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, UUID.randomUUID(), "Drain", null, null, null)));
     }

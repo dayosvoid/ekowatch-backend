@@ -12,8 +12,7 @@ public interface ReportApi {
     Page<ReportView> listReports(UUID actorId, UUID wardId, UUID streetId, ReportType reportType,
                                FloodStatus floodStatus, Integer page, Integer size, ReportSort sort);
 
-    /** Existing guarded read retained until the authority module replaces it in Step 6. */
-    List<ReportView> authorityReports(UUID actorId, int limit, int offset);
+    WardHazardsView listWardHazards(UUID actorId, UUID wardId);
 
     /** Internal confirmation collaboration only, not an HTTP operation. */
     ReportView lockForConfirmation(UUID actorId, UUID reportId, Instant transactionStartedAt);

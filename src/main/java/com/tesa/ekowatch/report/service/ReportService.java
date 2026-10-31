@@ -148,16 +148,22 @@ public class ReportService implements ReportApi {
         return new Page<>(items,requestedPage,requestedSize,total,(int) ((total + requestedSize - 1) / requestedSize));
     }
 
-    // Preserve the existing authority guard and its tests until Step 6 replaces this read.
-    @Transactional(readOnly = true)
-    public List<ReportView> authorityReports(UUID actorId, int limit, int offset) {
-        actors.requireRole(actorId, "AUTHORITY");
-        if (limit < 1 || limit > 100 || offset < 0) throw new RuleViolation("VALIDATION_FAILED");
-        Instant now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-        return db.query(VIEWS + "select * from report_views order by created_at desc,report_id limit ? offset ?",
-                (r,n) -> map(r,actorId,now), actorId,limit,offset);
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public WardHazardsView listWardHazards(UUID actorId, UUID wardId) {
+        actors.requireUser(actorId);
+        if (wardId == null) throw new RuleViolation("VALIDATION_FAILED");
+        if (!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from wards where id=?)",Boolean.class,wardId)))
+            throw new RuleViolation("RESOURCE_NOT_FOUND");
+        Instant now=clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var items=db.query(VIEWS + """
+            select * from report_views where ward_id=? and
+            (report_type='BLOCKED_DRAIN' or (report_type='FLOODED_ROAD' and last_evidence_at > ?))
+            order by created_at desc,report_id
+            """,(r,n)->map(r,actorId,now),actorId,wardId,Timestamp.from(now.minus(floodFreshness)));
+        Instant newest=db.queryForObject("select max(created_at) from reports where ward_id=?",
+                (r,n)->r.getTimestamp(1)==null ? null : r.getTimestamp(1).toInstant(),wardId);
+        return new WardHazardsView(wardId,now,newest,items);
     }
-
     // Internal collaboration: every evidence writer locks this row first in the same transaction.
     @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
     public ReportView lockForConfirmation(UUID actorId, UUID id, Instant transactionStartedAt) {
