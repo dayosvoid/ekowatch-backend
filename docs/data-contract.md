@@ -1,3 +1,11 @@
+# Merged HTTP integration note
+
+The Steps 2-3 contract below has been restored from dayo/data-rules without old service aliases. Esther's existing ReportController now consumes the shared CreateReportRequest.note and calls createReport/getReport/listReports using ActorAccess.id(Authentication). Its existing paths remain; listing uses required wardId, optional streetId/reportType/floodStatus, page/size defaults 0/20 and CONFIRMATIONS default sorting, returning Page<ReportView>. The current handler recognizes the canonical validation/not-found service codes. Authentication and principal-resolution implementation are preserved. The no-controller statements in earlier historical data-only steps describe their original scope, not the merged application's current state.
+
+V1 remains historical description; restored V2 renames it to note unchanged from the data branch. New report SQL, JPA, HTTP DTOs, demo statements and active fixtures use note. Historical V1 fixtures intentionally retain description. No Step 4 work or shared/live database migration/reset was performed.
+
+---
+
 # Step 3 implemented contract - 31 October 2026
 
 This section is the current service/DTO contract. Earlier Step 1/2 sections below are historical baseline and target context. No DDL or migration was added in Step 3; V1/V2 remain unchanged. Java 25, Boot 3.5.7, PostgreSQL, JdbcTemplate and JPA validation remain in place. DTOs are records separate from JPA entities. Report.reportType now maps ReportType with EnumType.STRING.

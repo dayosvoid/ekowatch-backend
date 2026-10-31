@@ -1,3 +1,92 @@
+# Merged integration verification - 31 October 2026
+
+Cause: dev/branch had V1-era Report.description, old ReportApi create/get/list methods, old ReportService description SQL, DTOs and demo SQL. The completed Steps 2-3 files (including source V2, build.md and data-contract.md) were absent, while target/classes/db/migration still contained V2 renaming description to note. Hibernate consequently expected a column that the migrated schema did not have. A clean build was required to prove the fix does not depend on stale generated resources.
+
+Compared against dayo/data-rules at 6b9c51bd4db453d927f028e45c6eac907ca76f6f. Restored the completed canonical data implementation, supporting DTO/API/services and JPA mappings, original V2, demo SQL and PostgreSQL tests from that reference. Report.note explicitly uses @Column(name="note"); no description column or old service aliases were added. Current application source uses note; description remains intentionally in V1, V2 preflight/rename, V1 migration fixtures and a negative JSON-field assertion.
+
+Preserved Esther's auth/security classes, ActorAccess.id(Authentication), DatabaseActorAccess, auth tests and confirmation/collection controllers. Adapted ReportController's existing routes to the shared CreateReportRequest, createReport/getReport/listReports, typed filters and Page response with principal-derived actorId. Added only the necessary canonical validation/not-found mappings to existing HTTP advice. ReportControllerTest now tests canonical delegation, blank-note refusal, JSON privacy/principal source, pagination defaults and HTTP error translation. Restored data tests retain valid authority/role/uniqueness/concurrency/history assertions. No Step 4 or other feature was implemented.
+
+Actual requested command results, in order (approved Maven cache/Docker access):
+
+```powershell
+mvn -B '-Dtest=PostgresRulesTest' test
+mvn -B clean verify
+git diff --check
+```
+
+Targeted command: exit 0, BUILD SUCCESS; 10 tests, 0 failures/errors/skips. Total time 03:00 min; finished 2026-10-31T11:48:22+01:00. Flyway applied V1/V2 to empty disposable PostgreSQL 17.11; Hibernate validated note and initialized EntityManagerFactory. Esther's user-details/authentication configuration initialized alongside the canonical data services.
+
+Clean command: exit 0, BUILD SUCCESS; Maven removed only generated target output, recompiled 86 production sources and 11 test sources under release 25, executed all suites, built/repackaged the JAR. Actual final output:
+```text
+Tests run: 41, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+Total time: 04:23 min
+Finished at: 2026-10-31T11:53:11+01:00
+```
+
+| Suite | Tests | Failures | Errors | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| ApiUserDetailsServiceTest | 2 | 0 | 0 | 0 |
+| AuthenticatedActorTest | 1 | 0 | 0 | 0 |
+| SecurityConfigTest | 3 | 0 | 0 | 0 |
+| CollectionControllerTest | 1 | 0 | 0 | 0 |
+| ModuleBoundaryTest | 1 | 0 | 0 | 0 |
+| PostgresRulesTest | 10 | 0 | 0 | 0 |
+| ReportControllerTest | 7 | 0 | 0 | 0 |
+| ReportMigrationTest | 4 | 0 | 0 | 0 |
+| RequestIdFilterTest | 2 | 0 | 0 | 0 |
+| ResidentReportApiTest | 10 | 0 | 0 | 0 |
+| Total | 41 | 0 | 0 | 0 |
+
+The controller HTTP tests use MockMvc and mocked module/principal interfaces; these are contract/binding checks, not a claim of full HTTP Basic authorization coverage. Real PostgreSQL tests cover private projections, preferences, photo ownership, filtering/pagination/freshness and constraints; migration tests cover both empty and populated-V1 paths plus preservation/preflight rejection. Negative-preflight migration-failure logs are expected passing assertions. Non-fatal Mockito/JVM agent and cached Hikari-pool warnings after test-container teardown were observed.
+
+V1 remains exactly as received on dev/branch (SHA256 49DF002EDAB7F243C4815774375699809E87336454E0854313B6ECDECA764175). V2 was restored byte-for-byte from dayo/data-rules: Git blob 664e384729264dd322ea38440467bedc1d65f6bd; SHA256 8ECDC97077E460D007B83A433B241070F831E8630049F2E40985DB93B20878C8. Existing applied migrations were not edited. No V3/new migration, duplicate column, schema-validation bypass, shared/live database access/reset or test skip was used. PostgreSQL databases were disposable postgres:17-alpine Testcontainers with test-only sslmode=disable. Java 25.0.4.1, Spring Boot 3.5.7, Maven 3.9.16 and Testcontainers 1.21.3 retained.
+
+The original uncommitted pom.xml merge-marker resolution and untracked ekobridge-project.zip were preserved. No dependency change was made by this repair. No commit, push or deployment. Earlier verification sections below are historical records from the data branch, not evidence for this merged revision.
+
+Changed/restored file inventory (excludes the pre-existing pom.xml and archive changes):
+- build.md
+- docs/data-contract.md
+- docs/engineer-a-handoff.md
+- docs/engineer-a-verification.md
+- src/main/java/com/tesa/ekowatch/photo/api/PhotoApi.java
+- src/main/java/com/tesa/ekowatch/photo/api/PhotoUrlResolver.java
+- src/main/java/com/tesa/ekowatch/photo/api/PhotoView.java
+- src/main/java/com/tesa/ekowatch/photo/domain/Photo.java
+- src/main/java/com/tesa/ekowatch/photo/service/PhotoService.java
+- src/main/java/com/tesa/ekowatch/report/api/CreateReportRequest.java
+- src/main/java/com/tesa/ekowatch/report/api/FloodStatus.java
+- src/main/java/com/tesa/ekowatch/report/api/ReportApi.java
+- src/main/java/com/tesa/ekowatch/report/api/ReportSort.java
+- src/main/java/com/tesa/ekowatch/report/api/ReportType.java
+- src/main/java/com/tesa/ekowatch/report/api/ReportView.java
+- src/main/java/com/tesa/ekowatch/report/domain/Report.java
+- src/main/java/com/tesa/ekowatch/report/service/ReportService.java
+- src/main/java/com/tesa/ekowatch/report/web/ReportController.java
+- src/main/java/com/tesa/ekowatch/shared/ApiExceptionHandler.java
+- src/main/java/com/tesa/ekowatch/shared/Location.java
+- src/main/java/com/tesa/ekowatch/shared/Page.java
+- src/main/java/com/tesa/ekowatch/shared/TimeConfiguration.java
+- src/main/java/com/tesa/ekowatch/user/api/CurrentUserView.java
+- src/main/java/com/tesa/ekowatch/user/api/Role.java
+- src/main/java/com/tesa/ekowatch/user/api/UserApi.java
+- src/main/java/com/tesa/ekowatch/user/domain/UserAccount.java
+- src/main/java/com/tesa/ekowatch/user/service/UserService.java
+- src/main/java/com/tesa/ekowatch/ward/api/StreetView.java
+- src/main/java/com/tesa/ekowatch/ward/api/WardApi.java
+- src/main/java/com/tesa/ekowatch/ward/api/WardView.java
+- src/main/java/com/tesa/ekowatch/ward/domain/Street.java
+- src/main/java/com/tesa/ekowatch/ward/service/WardService.java
+- src/main/resources/db/demo/demo.sql
+- src/main/resources/db/migration/V2__report_and_location_contract.sql
+- src/test/java/com/tesa/ekowatch/ModuleBoundaryTest.java
+- src/test/java/com/tesa/ekowatch/PostgresRulesTest.java
+- src/test/java/com/tesa/ekowatch/report/web/ReportControllerTest.java
+- src/test/java/com/tesa/ekowatch/ReportMigrationTest.java
+- src/test/java/com/tesa/ekowatch/ResidentReportApiTest.java
+
+---
+
 # Steps 2-3 test startup repair - 31 October 2026
 
 Read the supplied failing target/surefire-reports/com.tesa.ekowatch.PostgresRulesTest.txt before rerunning. It reported 10 errors in that class. The first failing case, differentResidentsConcurrently, could not load the context; the underlying chain was:
