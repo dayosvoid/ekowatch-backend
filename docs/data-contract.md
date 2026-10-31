@@ -1,3 +1,73 @@
+# Step 5 contract - repeat-safe confirmation and flood freshness
+
+Current schema is V4__report_confirmations.sql. Earlier sections below are historical where superseded. V1/V2/V3 are unchanged, including the Step 4 cutover. V4 performs metadata-only renames, with no row insert/delete/update: confirmations -> report_confirmations; user_id -> resident_id; created_at -> confirmed_at; unique constraint -> uq_report_confirmation_resident(report_id,resident_id). PK/FK constraint names and the resident lookup index are renamed consistently. All confirmation UUIDs, values, timestamps, defaults, nullability, uniqueness and FKs survive.
+
+report_confirmations maps to confirmation.domain.ReportConfirmation: id -> id UUID; report_id -> reportId UUID; resident_id -> residentId UUID; confirmed_at -> confirmedAt Instant. The old Confirmation entity is removed. Services, demo SQL and active fixtures use only the canonical names. Intentional pre-V4 migration fixtures and old migration scripts retain the historical names.
+
+```java
+ReportView ConfirmationApi.confirmReport(UUID actorId, UUID reportId)
+// report.api collaboration only, requires an existing transaction; never an HTTP operation:
+ReportView ReportApi.lockForConfirmation(UUID actorId, UUID reportId, Instant transactionStartedAt)
+```
+
+actorId is private verified-principal input, never client JSON. transactionStartedAt is private server Clock input supplied by ConfirmationService. No confirm/requireConfirmable aliases remain. Stored RESIDENT role and a different reporter are required. Null report IDs fail VALIDATION_FAILED, unknown reports RESOURCE_NOT_FOUND, invalid actor/role FORBIDDEN, and self-confirmation SELF_CONFIRMATION_NOT_ALLOWED. Legacy report status/updated_at remain stored and unchanged; the old OPEN-only confirmation workflow no longer governs the canonical MVP operation. No resolution transitions are added or exposed.
+
+ConfirmationService enters a READ_COMMITTED transaction and captures its Clock instant before role/lock waits, truncated to PostgreSQL microseconds. It obtains the report row FOR UPDATE through report.api, then reads committed evidence under that lock. The collaboration method uses MANDATORY transaction propagation so the lock cannot be acquired/released in a separate transaction before the writer. Every confirmation service evidence write takes the same report lock first. Different residents' writes serialize on one report, trading per-report write parallelism for a consistent renewal decision. No module imports another module's internal packages.
+
+First evidence inserts one UUID row using the named unique constraint and explicit confirmedAt from the captured instant. If that resident already has a row, non-flood repeats always do nothing; flood repeats do nothing while current at transaction entry. Only a FLOODED_ROAD already expired at that entry instant can update that resident's confirmed_at. UUID and resident count do not change. A renewal committed by a writer ahead of a waiting transaction is visible after the lock and prevents another renewal. If a call began current and waited until after expiry, it remains a no-op, though its returned read can correctly be EXPIRED. New residents can insert their first evidence after expiry and increase the distinct-person count normally.
+
+The response is the authoritative full canonical ReportView, read from real rows after the operation's writes under the same lock. The Spring transaction interceptor commits before the caller receives the DTO; commit/projection failure propagates instead of returning success. This is a snapshot at that operation's serialization point, not a promise that another resident cannot commit immediately afterward. The API does not return an entity, reporter identity, legacy lifecycle state or precise submitted location.
+
+Config property ekowatch.flood-freshness-hours defaults to 6, optionally supplied by EKOWATCH_FLOOD_FRESHNESS_HOURS; values must be positive whole hours. ReportService uses one configured Duration for both projection expiry and SQL filter cutoffs, and the locked projection gives ConfirmationService the same policy. lastEvidenceAt = max(report.created_at, report_confirmations.confirmed_at). FLOODED_ROAD expiresAt = lastEvidenceAt + duration; CURRENT iff operation time is strictly before expiresAt, otherwise EXPIRED. Non-flood floodStatus/expiresAt are null, while lastEvidenceAt still uses actual stored evidence. Ordinary GET/list never write or refresh timestamps, including during/after an outage. No jobs/counters/evidence-history table are added.
+
+A later submission after a later expiry is fresh testimony, not perpetual replay of the original request. The same resident still counts once, but deliberately attests again with a new evidence time. The server does not replay an old confirmation response forever or renew on reads. Esther's client integration must treat a post-expiry confirmation as a deliberate new attestation, rather than an unattended loop retrying an old action across repeated expiries. Report-creation idempotency remains Step 7 and is not introduced here.
+
+Existing ConfirmationController path /api/reports/{reportId}/confirm is retained and still obtains actorId from ActorAccess.id(Authentication). It now calls confirmReport and returns ReportView after commit. Existing CREATED status is retained for Esther's HTTP review; self-confirmation is mapped through existing advice to 409 with the canonical code. No new controller, route, auth flow or OpenAPI paths were added. Seed volumes/IDs stay the same and insert-only reruns do not refresh confirmed_at; final seed expansion remains Step 8. No Step 6 disputes/metrics were implemented.
+
+---
+
+# Step 4 contract - dated schedules and completion facts
+
+Current data schema is V3__dated_collections.sql after unchanged V1/V2. Earlier sections below are historical where superseded. No Step 5 confirmations or Step 6 disputes/metrics have been implemented.
+
+| Storage/entity | Exact columns -> Java members |
+| --- | --- |
+| collection_schedules / CollectionSchedule | id -> id UUID; street_id -> streetId UUID FK streets; operator_id -> operatorId UUID FK users; collection_date -> collectionDate LocalDate; created_at -> createdAt Instant |
+| collections / CollectionRecord | id -> id UUID; street_id -> streetId UUID FK streets; collection_date -> collectionDate LocalDate; completed_by -> completedBy UUID FK users; completed_at -> completedAt Instant |
+| legacy_collection_schedules | Original weekly rows, IDs, active flags, weekday values and constraints retained; no JPA mapping/current application queries |
+| legacy_pickups | Every original COMPLETED/FAILED attempt, ID, recorded_by and created_at retained; no JPA mapping/current application queries |
+| collection_migration_cutover | Internal migration audit: id=1, cutover_date, horizon_end_date, recorded_at; not a product DTO/API |
+
+Named uniqueness: uq_schedule_street_date(street_id,collection_date), uq_collection_street_date(street_id,collection_date). collections and reports have composite street/date FKs to collection_schedules. Report street/ward integrity remains. Database checks forbid future completion dates and require MISSED_PICKUP dates to be strictly before the database's Lagos today; V2 still requires dates exactly for MISSED_PICKUP. No lifecycle/history column was removed. Pickup entity and old weekly mapping were removed; no status is stored in collections.
+
+```java
+List<CollectionScheduleView> CollectionApi.listCollectionSchedules(
+    UUID actorId, UUID wardId, LocalDate fromDate, LocalDate toDate)
+List<StreetView> CollectionApi.listMyAssignedStreets(
+    UUID actorId, LocalDate fromDate, LocalDate toDate)
+CollectionView CollectionApi.recordCollection(
+    UUID actorId, UUID streetId, LocalDate collectionDate)
+```
+
+actorId is private verified-principal input, never client JSON. listCollectionSchedules requires a stored user and existing explicit ward, scopes every row to it, and orders collectionDate, streetName, streetId, scheduleId. Dates are inclusive, required, ordered, at most 31 days. listMyAssignedStreets requires OPERATOR, returns distinct streets from that operator's dated assignments in range and still-valid ward assignments, ordered name/UUID; no assignments yields an empty list. Neither read exposes operator performance or submitted report coordinates.
+
+recordCollection requires OPERATOR, current ward assignment, the actor recorded as operator_id on that street/date occurrence, and a date no later than injected-Clock Lagos today. Invalid/null/future/unscheduled dates use VALIDATION_FAILED, unknown street RESOURCE_NOT_FOUND, missing ward assignment WARD_ASSIGNMENT_REQUIRED, and wrong role/scheduled operator FORBIDDEN. Insert-on-conflict runs at READ_COMMITTED and returns the committed original ID/timestamp on repeat without rewriting. completedBy is the trusted actor; completedAt is injected Clock time at PostgreSQL microsecond precision. There is no FAILED input, correction flow or old recordPickup/missed service alias.
+
+| View | Exact members |
+| --- | --- |
+| CollectionScheduleView | UUID scheduleId, UUID wardId, UUID streetId, String streetName, LocalDate collectionDate, CollectionStatus collectionStatus, Instant completedAt, long missedReportCount |
+| CollectionView | UUID collectionId, UUID streetId, LocalDate collectionDate, Instant completedAt, CollectionStatus collectionStatus |
+
+CollectionStatus has only SCHEDULED, DONE, MISSED, DISPUTED. This step returns SCHEDULED for today/future without completion, MISSED for elapsed dates without completion, DONE when completion exists. DISPUTED is reserved for Step 6; a missed report does not change these states yet. completedAt is null on uncompleted schedule views; recordCollection returns a completed CollectionView with a non-null ID/time. missedReportCount counts actual MISSED_PICKUP reports for the exact street/date, independent of confirmations. Reads use injected Clock and Africa/Lagos; GET never writes state or counters.
+
+ReportService validates MISSED_PICKUP through collection.api.listCollectionSchedules for the exact street/date and requires it elapsed; the database FK/check protects direct writes too. Reports can still disagree with an existing completion: both facts are kept for Step 6. No photo, confirmation or report-freshness semantics changed.
+
+Existing CollectionController was adapted in place, retaining Esther's /api/pickups and /api/authority/missed-pickups paths for her integration review. The completion request now has streetId and collectionDate only, returns CollectionView and obtains actorId via ActorAccess.id(Authentication). The existing authority read keeps its AUTHORITY guard, requires wardId, and filters canonical schedule views to MISSED; no dashboard/performance query was added. These transport paths are not old service aliases. No new controller/routes were introduced; Esther owns final path/status/OpenAPI decisions and wiring of the new listing APIs. WARD_ASSIGNMENT_REQUIRED is mapped to 403 by the existing advice.
+
+Migration inputs, history preservation, cutover and explicit-mapping procedure are documented in engineer-a-handoff.md. Seed compatibility remains seven stable dated occurrences anchored at cutover_date-1 through cutover_date+5, fixed original demo UUIDs, insert-only. No final Step 8 expansion or credential/photo provisioning was added.
+
+---
+
 # Merged HTTP integration note
 
 The Steps 2-3 contract below has been restored from dayo/data-rules without old service aliases. Esther's existing ReportController now consumes the shared CreateReportRequest.note and calls createReport/getReport/listReports using ActorAccess.id(Authentication). Its existing paths remain; listing uses required wardId, optional streetId/reportType/floodStatus, page/size defaults 0/20 and CONFIRMATIONS default sorting, returning Page<ReportView>. The current handler recognizes the canonical validation/not-found service codes. Authentication and principal-resolution implementation are preserved. The no-controller statements in earlier historical data-only steps describe their original scope, not the merged application's current state.

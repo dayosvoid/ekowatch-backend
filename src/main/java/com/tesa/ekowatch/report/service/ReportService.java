@@ -2,12 +2,14 @@ package com.tesa.ekowatch.report.service;
 
 import com.tesa.ekowatch.report.api.*;
 import com.tesa.ekowatch.photo.api.PhotoApi;
+import com.tesa.ekowatch.collection.api.CollectionApi;
 import com.tesa.ekowatch.user.api.ActorAccess;
 import com.tesa.ekowatch.shared.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -22,9 +24,14 @@ public class ReportService implements ReportApi {
     private final ActorAccess actors;
     private final PhotoApi photos;
     private final Clock clock;
+    private final CollectionApi collections;
+    private final Duration floodFreshness;
 
-    public ReportService(JdbcTemplate db, ActorAccess actors, PhotoApi photos, Clock clock) {
-        this.db = db; this.actors = actors; this.photos = photos; this.clock = clock;
+    public ReportService(JdbcTemplate db, ActorAccess actors, PhotoApi photos, Clock clock, CollectionApi collections,
+                         @Value("${ekowatch.flood-freshness-hours:6}") long floodFreshnessHours) {
+        this.db = db; this.actors = actors; this.photos = photos; this.clock = clock; this.collections = collections;
+        if (floodFreshnessHours <= 0) throw new IllegalArgumentException("ekowatch.flood-freshness-hours must be positive");
+        this.floodFreshness = Duration.ofHours(floodFreshnessHours);
     }
 
     // Select only projection data. Private submitted coordinates and reporter identity are not read.
@@ -37,9 +44,9 @@ public class ReportService implements ReportApi {
                      greatest(r.created_at,coalesce(c.last_confirmation,r.created_at)) as last_evidence_at
               from reports r join streets s on s.id=r.street_id and s.ward_id=r.ward_id
               left join lateral (
-                select count(*) as confirmation_count,max(created_at) as last_confirmation,
-                       bool_or(user_id=?) as confirmed_by_me
-                from confirmations where report_id=r.id
+                select count(*) as confirmation_count,max(confirmed_at) as last_confirmation,
+                       bool_or(resident_id=?) as confirmed_by_me
+                from report_confirmations where report_id=r.id
               ) c on true
             )
             """;
@@ -47,7 +54,7 @@ public class ReportService implements ReportApi {
     private ReportView map(ResultSet r, UUID actorId, Instant now) throws SQLException {
         ReportType type = ReportType.valueOf(r.getString("report_type"));
         Instant lastEvidenceAt = r.getTimestamp("last_evidence_at").toInstant();
-        Instant expiresAt = type == ReportType.FLOODED_ROAD ? lastEvidenceAt.plus(Duration.ofHours(6)) : null;
+        Instant expiresAt = type == ReportType.FLOODED_ROAD ? lastEvidenceAt.plus(floodFreshness) : null;
         FloodStatus floodStatus = expiresAt == null ? null : now.isBefore(expiresAt) ? FloodStatus.CURRENT : FloodStatus.EXPIRED;
         UUID photoId = r.getObject("photo_id", UUID.class);
         String photoUrl = photoId == null ? null : photos.getPhoto(actorId, photoId).photoUrl();
@@ -76,6 +83,12 @@ public class ReportService implements ReportApi {
             throw new RuleViolation("VALIDATION_FAILED");
         var wards = db.query("select ward_id from streets where id=?", (r,n) -> r.getObject(1,UUID.class), request.streetId());
         if (wards.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
+        if (request.reportType() == ReportType.MISSED_PICKUP) {
+            LocalDate today = LocalDate.ofInstant(clock.instant(), ZoneId.of("Africa/Lagos"));
+            if (!request.collectionDate().isBefore(today) || collections.listCollectionSchedules(actorId, wards.getFirst(),
+                    request.collectionDate(), request.collectionDate()).stream().noneMatch(s -> s.streetId().equals(request.streetId())))
+                throw new RuleViolation("VALIDATION_FAILED");
+        }
         if (request.photoId() != null) {
             var owners = db.query("select owner_id from photos where id=?", (r,n) -> r.getObject(1,UUID.class), request.photoId());
             if (owners.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
@@ -125,7 +138,7 @@ public class ReportService implements ReportApi {
         if (reportType != null) { where.append(" and report_type=?"); args.add(reportType.name()); }
         if (floodStatus != null) {
             where.append(floodStatus == FloodStatus.CURRENT ? " and last_evidence_at > ?" : " and last_evidence_at <= ?");
-            args.add(Timestamp.from(now.minus(Duration.ofHours(6))));
+            args.add(Timestamp.from(now.minus(floodFreshness)));
         }
         long total = Objects.requireNonNull(db.queryForObject(VIEWS + "select count(*) from report_views" + where, Long.class, args.toArray()));
         String order = sort == ReportSort.NEWEST ? "created_at desc,report_id" : "confirmation_count desc,created_at desc,report_id";
@@ -145,12 +158,15 @@ public class ReportService implements ReportApi {
                 (r,n) -> map(r,actorId,now), actorId,limit,offset);
     }
 
-    // Existing confirmation behaviour remains until Step 5; never expose this as an endpoint.
-    public void requireConfirmable(UUID id, UUID actorId) {
-        var rows = db.queryForList("select reporter_id,status from reports where id=? for share", id);
-        if (rows.isEmpty()) throw new RuleViolation("REPORT_NOT_FOUND");
+    // Internal collaboration: every evidence writer locks this row first in the same transaction.
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public ReportView lockForConfirmation(UUID actorId, UUID id, Instant transactionStartedAt) {
+        actors.requireRole(actorId, "RESIDENT");
+        if (id == null || transactionStartedAt == null) throw new RuleViolation("VALIDATION_FAILED");
+        var rows = db.queryForList("select reporter_id from reports where id=? for update", id);
+        if (rows.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
         var row = rows.getFirst();
-        if (!"OPEN".equals(row.get("status"))) throw new RuleViolation("REPORT_NOT_ELIGIBLE");
-        if (actorId.equals(row.get("reporter_id"))) throw new RuleViolation("SELF_CONFIRMATION");
+        if (actorId.equals(row.get("reporter_id"))) throw new RuleViolation("SELF_CONFIRMATION_NOT_ALLOWED");
+        return find(actorId, id, transactionStartedAt);
     }
 }

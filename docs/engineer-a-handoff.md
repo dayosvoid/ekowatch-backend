@@ -1,3 +1,64 @@
+# Step 5 handoff - confirmations and flood testimony
+
+Verified: focused 25 tests passed; mvn -B clean verify passed all 73 tests with zero failures/errors/skips and packaging at 2026-10-31T14:39:56+01:00. Initial temporary-constraint-name test failure, its correction, exact commands and Step 5 file inventory are preserved in engineer-a-verification.md.
+
+The current exact contract is the Step 5 section of data-contract.md. V4 renames the confirmation table/columns/unique constraint and associated PK/FK/index names without rewriting data. V1-V3 and the dated-collection cutover remain untouched. Confirmation IDs/timestamps survive migration. New confirmations use report_confirmations / ReportConfirmation / residentId / confirmedAt and the named uq_report_confirmation_resident constraint. Historical migration fixtures retain old names intentionally.
+
+Wire ConfirmationApi.confirmReport(actorId,reportId), returning ReportView; the old confirm method is gone. actorId is private trusted-principal input, never client JSON. The existing controller path is retained, resolves principal through ActorAccess.id, and returns the view after the transaction commits. Self-confirmation uses SELF_CONFIRMATION_NOT_ALLOWED; existing advice maps it to 409. Other service errors are VALIDATION_FAILED, RESOURCE_NOT_FOUND and FORBIDDEN. No controllers/auth/session/login flow or paths were added, and Esther's principal/security implementation is preserved. She still owns final HTTP status/OpenAPI/security integration; CREATED remains the existing transport status for her review.
+
+Each write locks the report FOR UPDATE via a mandatory-transaction report.api collaboration before reading/writing evidence. At READ_COMMITTED, the service captures injected Clock time at entry before waiting. First confirmation inserts a unique resident; current repeats and every non-flood repeat are no-ops. An already-confirmed resident may renew only an expired flood, retaining the original UUID and count and updating only confirmed_at. A concurrent renewal already committed under that report lock prevents a second renewal; a call that began current cannot become fresh testimony simply by waiting past expiry. Legacy status values remain private stored history, do not gate the canonical confirmation operation, and are never transitioned by it.
+
+ekowatch.flood-freshness-hours defaults to 6 (EKOWATCH_FLOOD_FRESHNESS_HOURS override), positive whole hours. Projection/filter/renewal decisions share the same duration. lastEvidenceAt is max(report time, real confirmation timestamps), with strict CURRENT-before/exact-EXPIRED boundary. Non-flood freshness fields are null. Reads do not write, even after a one-hour outage. Response construction/commit failure rolls back evidence; no successful DTO is returned for an aborted operation. A response may become outdated immediately after another resident commits, so it is not a stored perpetual replay snapshot.
+
+A resident submitting again after a later expiry gives fresh testimony, not perpetual replay of an old request. Do not make the client automatically renew expired floods by indefinitely replaying a stale action; get deliberate user testimony. Immediate/lost-response retries while current are safe no-ops, but later expiry is a new evidence window. No confirmation removal, notification, evidence-history table or generic idempotency mechanism was added. Report creation retry protection remains Step 7; disputes and authority projections remain Step 6.
+
+Demo SQL now uses canonical confirmation names and retains fixed IDs, insert-only conflict behaviour, disabled-login hashes and opt-in guards; reruns do not refresh evidence. No final Step 8 expansion. New populated-V1/fresh migration tests verify exact timestamp/UUID preservation, uniqueness/FKs and renamed metadata. Focused PostgreSQL tests cover commit visibility, rollback after a projection failure, configured duration, first/new/renewed evidence, all non-flood repeats, distinct/same-resident races, wait-across-expiry, exact boundaries/outage reads and no GET writes. Existing valid role/authority/unique-person assertions remain; obsolete duplicate-error/OPEN-only workflow expectations are replaced with the requested repeat-safe/history-preservation semantics. Actual commands/results are recorded in engineer-a-verification.md.
+
+No shared/live database was used. An eventual authorised real migration still needs the prior rehearsal/recovery procedure; successful Flyway Community migrations do not auto-undo. No commit/push/deployment. Earlier handoff sections below are historical where superseded.
+
+---
+
+# Step 4 handoff - dated collection cutover
+
+Verified: mvn -B clean verify passed all 58 tests, zero failures/errors/skips, with packaging at 2026-10-31T14:14:19+01:00. The final date-fixture adjustment passed a separate six-test CollectionRulesTest rerun at 14:16:19+01:00. See engineer-a-verification.md for the full command history, file inventory and evidence limits.
+
+V3__dated_collections.sql is the next forward migration; V1/V2 are unchanged. Canonical fields/methods/views are in the current Step 4 section of data-contract.md. Internal actor IDs still come from Esther's verified principal. No Step 5/6 work, new controller, auth flow, schedule-management interface, job, correction workflow, commit or deployment.
+
+## One-time cutover inputs
+
+Flyway placeholders are collectionCutoverDate (default AUTO) and collectionMigrationMapping (default []). Spring configuration maps them from EKOWATCH_COLLECTION_CUTOVER_DATE and EKOWATCH_COLLECTION_MIGRATION_MAPPING. AUTO uses the database transaction's current Africa/Lagos date; an explicit ISO date selects the reviewed cutover boundary. collection_migration_cutover permanently records the chosen date, inclusive horizon end (date+29) and migration timestamp. These are one-time migration inputs, not a way to change schedules after migration. Do not print actual environment values or sensitive mapping data in logs.
+
+Mapping is a JSON array of trusted, operator-approved decisions. A row has streetId and operatorId; optionally collectionDate for an exact occurrence. Example shape (replace placeholders with reviewed UUIDs/dates, not literal values):
+
+```json
+[
+  {"streetId":"<street UUID>","operatorId":"<default operator UUID>"},
+  {"streetId":"<street UUID>","collectionDate":"YYYY-MM-DD","operatorId":"<operator for this date UUID>"}
+]
+```
+
+A street default applies only to active weekly-pattern expansion within the 30-day horizon. An exact date overrides that default. Every chosen operator must have role OPERATOR and a stored assignment to that street's ward. If there is exactly one eligible operator, unmapped weekly occurrences use that unambiguous candidate. Zero/multiple eligible operators without a complete mapping fail preflight; no first UUID is selected. Invalid active ward assignments also fail instead of being silently ignored. Duplicate mappings fail uniqueness checks. Dated mappings outside cutover patterns/completions may create only prerequisite dates for actual existing MISSED_PICKUP reports; unused dated mappings fail. Such historical occurrences must be explicitly verified by the data owner, not inferred from a report's assertion alone.
+
+## Preservation and preflight
+
+The migration locks source tables to prevent concurrent data changes during the transactional cutover. It retains all weekly rows (including inactive) as legacy_collection_schedules and all pickup attempts (including FAILED) as legacy_pickups with their original columns, UUIDs, values and timestamps. The old JPA mappings are removed and current services never query those tables. No history is truncated/discarded.
+
+Only actual COMPLETED attempts backfill collections, keeping their IDs and created_at -> completed_at/recorded_by -> completed_by. Their exact dates get prerequisite schedule rows, using the recorded operator only if current stored role and ward assignment are valid. No other arbitrary historical dates are expanded. Reconstructed schedule IDs are deterministic md5('historical-completion:' + pickup UUID)::uuid, with created_at equal to the legacy completion timestamp; this is not a claim that the original schedule creation time is known. Weekly occurrence IDs are deterministic md5('weekly-occurrence:' + weekly UUID + ':' + ISO date)::uuid, and mapped report occurrences use 'mapped-occurrence:' + street UUID + ':' + ISO date. Every original weekly UUID remains intact in legacy storage.
+
+Active weekly schedules expand only cutover_date through cutover_date+29. If expansion and historical completion overlap, the historical prerequisite keeps its ID/time, and the effective mapped operator must agree. A per-date override can explicitly resolve a differing weekly default; no recorded operator or completion is rewritten. Invalid/future completion dates/roles/ward assignments, conflicting mappings and non-elapsed/missing report occurrences all fail preflight. FAILED attempts remain legacy evidence and never become completions. Current operator_wards has no historical effective dates: validating it cannot prove past assignment history, so any suspected historical changes still need explicit owner-reviewed resolution, not invented history.
+
+Before any later authorised real migration, rehearse on an isolated populated copy: inventory weekly active/inactive patterns, all attempts and timestamps, completed operators' valid roles/wards, wards with multiple/no candidates, existing missed-report dates, explicit mapping coverage and conflicts. Review the cutover date/horizon, verify every mapped historical occurrence, and retain a recovery copy. Ambiguous data must not be guessed, truncated or discarded. We have not inspected or changed a shared/live database. A failed V3 transaction leaves V2/data intact (tested); successful migrations have no automatic Flyway Community undo. An eventual successful-cutover problem requires a reviewed forward fix or separately authorised recovery, not a reset by this code.
+
+## Service and Esther integration
+
+Wire CollectionApi.listCollectionSchedules(actorId,wardId,fromDate,toDate), listMyAssignedStreets(actorId,fromDate,toDate) and recordCollection(actorId,streetId,collectionDate). All ranges are inclusive and at most 31 days. Writes require the scheduled operator plus current ward assignment; repeats return the original record/time. SCHEDULED/DONE/MISSED derive from real rows and injected Clock/Lagos dates. DISPUTED remains Step 6. Report creation now requires an elapsed exact dated occurrence for MISSED_PICKUP, enforced by service and FK/check. Confirmation/flood freshness remains Step 3/5 scope.
+
+The pre-existing collection controller paths remain for Esther to finalise. Its request is now streetId/collectionDate with no status or actor JSON; it returns CollectionView. The authority-only missed read retains its guard and uses ward-scoped canonical schedule views; no new routes/performance query were added. Existing HTTP advice maps WARD_ASSIGNMENT_REQUIRED to 403. Auth/security/principal resolution and login remain Esther's work and were preserved.
+
+DemoSeed guards are unchanged. demo.sql now inserts seven dated occurrences with original reserved UUIDs and an explicit recorded-cutover anchor, without overwriting schedules/completions or refreshing evidence on repeat. The seed's volumes are deliberately not Step 8's final dataset. Existing tests/fixtures now use dated occurrences and elapsed MISSED_PICKUP dates; V1/weekly/FAILED preservation fixtures remain intentionally legacy SQL. Actual test commands/results are in engineer-a-verification.md. Prior handoff sections below are historical where superseded.
+
+---
+
 # Merged integration repair - canonical note contract
 
 Verification: requested PostgresRulesTest passed 10 tests; mvn -B clean verify passed all 41 tests (0 failures/errors/skips), clean compilation and packaging at 2026-10-31T11:53:11+01:00. Full file inventory and actual command evidence are in engineer-a-verification.md.

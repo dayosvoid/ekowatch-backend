@@ -1,3 +1,129 @@
+# Step 5 verification - 31 October 2026
+
+Only repeat-safe confirmations, canonical confirmation persistence/callers and configurable flood freshness were implemented. Existing uncommitted Step 4 work was preserved; no Step 6 behaviour, shared/live database access, .env value output, database reset, commit, push or deployment. Java 25.0.4.1, Spring Boot 3.5.7, Maven 3.9.16, Testcontainers 1.21.3 and disposable postgres:17-alpine / PostgreSQL 17.11 with Docker 29.8.0. Approved Maven cache/Docker access was used.
+
+## Actual command history
+
+1. `mvn -B '-Dtest=PostgresRulesTest' test`: exit 1, BUILD FAILURE, 10 tests, 0 assertion failures, 1 error, 0 skips; 02:06 min; finished 2026-10-31T14:28:45+01:00. V4/Flyway and JPA validation initialized successfully and the real-table duplicate assertion returned SQLSTATE 23505. The temporary LIKE-table demonstration guessed a cloned constraint name after the rename. Actual error: constraint "constraint_evidence_report_id_resident_id_key" of relation "constraint_evidence" does not exist. Fixed the test to query pg_constraint for its temporary relation, assert exactly one UNIQUE(report_id,resident_id), then quote/drop that specific temporary constraint. The duplicate count, restored uniqueness and SQLSTATE assertions were retained; no production constraint was removed or weakened.
+2. `mvn -B '-Dtest=PostgresRulesTest,ConfirmationFreshnessTest,ConfirmationMigrationTest,ConfirmationControllerTest' test`: exit 0, BUILD SUCCESS, 25 tests, 0 failures/errors/skips; 02:32 min; finished 2026-10-31T14:34:34+01:00. Existing rules 10, freshness/transaction tests 10, migration tests 2, controller tests 3 all passed.
+3. `mvn -B clean verify`: exit 0, BUILD SUCCESS, 73 tests, 0 failures/errors/skips; 04:42 min; finished 2026-10-31T14:39:56+01:00. Cleanly compiled 89 production and 16 test source files with release 25, built and repackaged the JAR. Actual final output:
+
+```text
+Tests run: 73, Failures: 0, Errors: 0, Skipped: 0
+spring-boot:3.5.7:repackage (repackage)
+BUILD SUCCESS
+Total time: 04:42 min
+Finished at: 2026-10-31T14:39:56+01:00
+```
+
+4. `git diff --check`: passed. `git diff --exit-code -- src/main/resources/db/migration/V1__mvp_foundation.sql src/main/resources/db/migration/V2__report_and_location_contract.sql src/main/resources/db/migration/V3__dated_collections.sql pom.xml src/main/java/com/tesa/ekowatch/auth` returned 0. V1 SHA256 49DF002EDAB7F243C4815774375699809E87336454E0854313B6ECDECA764175; V2 8ECDC97077E460D007B83A433B241070F831E8630049F2E40985DB93B20878C8; V3 1EEA2CCC85FA0CABE86AF166259D2A33AB9B8EF8F33E36081D40531ACE7FA780 unchanged. New V4 SHA256 52AB05F12D911C4B15F205B2FFD580E78C49F51D4A367D3E923E08E8239F026D.
+
+## Evidence and limitations
+
+ConfirmationMigrationTest exercised empty V1->V4 and populated-V1->V4 migrations in fresh isolated schemas. It asserts exact old row/UUID/microsecond timestamp preservation after column-name normalization, canonical table/columns/unique constraint/resident index, retained FK/null constraints (23503/23502), real duplicate rejection (23505), zero migration rerun, and unchanged report note. The new V4 is metadata-only; new service writes may subsequently update confirmed_at only as explicitly allowed for expired flood testimony. Hibernate initialized with ddl-auto=validate and the new ReportConfirmation mapping. Historical V1/older-target fixtures intentionally retain confirmations/user_id/created_at; all active SQL/seed/entity members use report_confirmations/resident_id/confirmed_at. No old confirm or requireConfirmable service aliases remain.
+
+ConfirmationFreshnessTest uses a two-hour property override with injected Clock and real PostgreSQL. Existing ResidentReportApiTest still verifies the default six-hour projection/filter behaviour. The focused tests prove: first evidence committed/visible through a separate connection before API return; authoritative confirmedByMe/count; immediate repeats preserve row ID/timestamp and report history; different residents racing return counts 1 and 2; same resident racing returns one identical view/person; expired reconfirmation at the exact boundary preserves ID and people, leaves another resident's timestamp untouched, and can give fresh testimony again after a later expiry; a new resident after expiry inserts one new person; all three non-flood types always preserve timestamps on repeat; configured expiry/filter boundaries immediately before/at expiry and one-hour-later reads with no DB mutation; a transaction started current and waiting past expiry stays a no-op; concurrent expired repeats with different captured entry times return one renewal; role/self/missing/null refusal without evidence; and a synthetic photo-adapter projection failure after INSERT rolls back the row before returning an error, allowing a clean retry.
+
+Lock-wait fixtures release their independent JDBC lock before closing worker executors even on test failure. Writers capture Clock time at transaction entry, take the report FOR UPDATE through report.api in the same mandatory transaction, and use READ_COMMITTED to observe a renewal committed ahead of them. No confirmation evidence history, removal, notification, background job or generic idempotency infrastructure was added. The existing temporary constraint demonstration remains only compatibility evidence, not the real-table mutation-invariant experiment reserved for Step 9.
+
+Existing valid resident/self/authority/unique-person/commit-visibility assertions remain. The obsolete same-resident duplicate-error expectation was changed to two successful repeat-safe results with one actual resident row. The old OPEN-only eligibility assertion was superseded by the canonical resident/self contract and strengthened into a successful confirmation plus exact preservation of legacy status/updated_at; no lifecycle transitions were added. Report/get/list field privacy, filtering and six-hour defaults remain covered. Legacy collection preservation/assignment/completion/date rules and existing auth/controller tests passed unchanged in behaviour. Step 4 DONE-with-report remains DONE; no Step 6 dispute logic was introduced.
+
+Controller tests verify existing route/principal delegation, canonical private response JSON, absent old confirm alias and SELF_CONFIRMATION_NOT_ALLOWED through existing advice. These MockMvc/module-mock checks are not a new claim of complete HTTP Basic authorization coverage or live integration. Esther retains security, final HTTP status/OpenAPI and client testimony/retry UX responsibilities. A later post-expiry submission is new testimony, not an unattended perpetual replay of the original request; no request-idempotency feature was added for confirmations or report creation.
+
+Expected negative V2/V3 preflight rollback logs occurred in existing preservation tests. Non-fatal Mockito/JVM dynamic-agent and cached Hikari-pool warnings after earlier container teardown occurred; the final run had no errors or skips. Generated actual reports are in target/surefire-reports. No timings, shared-data inspection or production success beyond these commands are claimed. Seed IDs/volumes remain stable and insert-only; no renewal on seed rerun and no Step 8 expansion. Old verification sections below remain historical.
+
+## Files changed in Step 5
+
+- docs/data-contract.md
+- docs/engineer-a-handoff.md
+- docs/engineer-a-verification.md
+- src/main/resources/db/migration/V4__report_confirmations.sql (new)
+- src/main/java/com/tesa/ekowatch/confirmation/domain/Confirmation.java (removed)
+- src/main/java/com/tesa/ekowatch/confirmation/domain/ReportConfirmation.java (new)
+- src/main/java/com/tesa/ekowatch/confirmation/api/ConfirmationApi.java
+- src/main/java/com/tesa/ekowatch/confirmation/service/ConfirmationService.java
+- src/main/java/com/tesa/ekowatch/confirmation/web/ConfirmationController.java (existing caller adaptation only)
+- src/main/java/com/tesa/ekowatch/report/api/ReportApi.java
+- src/main/java/com/tesa/ekowatch/report/service/ReportService.java
+- src/main/java/com/tesa/ekowatch/shared/ApiExceptionHandler.java
+- src/main/resources/application.yml (freshness property; prior cutover settings preserved)
+- src/main/resources/db/demo/demo.sql (canonical confirmation names only)
+- src/test/java/com/tesa/ekowatch/PostgresRulesTest.java
+- src/test/java/com/tesa/ekowatch/ResidentReportApiTest.java
+- src/test/java/com/tesa/ekowatch/ReportMigrationTest.java
+- src/test/java/com/tesa/ekowatch/ConfirmationFreshnessTest.java (new)
+- src/test/java/com/tesa/ekowatch/ConfirmationMigrationTest.java (new)
+- src/test/java/com/tesa/ekowatch/confirmation/web/ConfirmationControllerTest.java (new test, not controller)
+
+Other working-tree changes belong to the already completed Step 4 and were retained; ekobridge-project.zip remains untouched. No commit/push/deployment.
+
+---
+
+# Step 4 verification - 31 October 2026
+
+Implemented only dated collections/cutover and necessary caller/fixture compatibility. Java 25.0.4.1, Spring Boot 3.5.7, Maven 3.9.16, Testcontainers 1.21.3, postgres:17-alpine / PostgreSQL 17.11 and Docker 29.8.0. Approved Maven cache/Docker access was used. All database tests ran against disposable containers; no shared/live database, .env values, reset, commit, push or deployment.
+
+## Actual commands/results
+
+1. `mvn -B '-Dtest=PostgresRulesTest' test`: BUILD SUCCESS, exit 0, 10 tests, no failures/errors/skips, 02:46 min, finished 2026-10-31T14:02:06+01:00. Compiled 89 production sources under release 25; V1/V2/V3 applied on empty PostgreSQL and Hibernate initialized with ddl-auto=validate. This was an intermediate run before the final additional mapping checks.
+2. `mvn -B verify`: preliminary BUILD SUCCESS, exit 0, 55 tests, no failures/errors/skips, 05:09 min, finished 2026-10-31T14:08:40+01:00. Included eight migration and six collection-rule tests. Review added three migration cases (effective date override, invalid active assignment, unused dated mapping), explicit completion READ_COMMITTED and a DB future-date check after this version had been compiled; this is not the final-source evidence.
+3. `mvn -B clean verify`: BUILD SUCCESS, exit 0, 58 tests, no failures/errors/skips, 05:08 min, finished 2026-10-31T14:14:19+01:00. Cleanly compiled all 89 production and 13 test sources, exercised the final V3/production code, and packaged/repackaged successfully. Relevant actual output:
+
+```text
+Tests run: 11, Failures: 0, Errors: 0, Skipped: 0 -- CollectionMigrationTest
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0 -- CollectionRulesTest
+Tests run: 58, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
+Total time: 05:08 min
+Finished at: 2026-10-31T14:14:19+01:00
+```
+
+4. `mvn -B '-Dtest=CollectionRulesTest' test`: BUILD SUCCESS, exit 0, six tests, no failures/errors/skips, 01:45 min, finished 2026-10-31T14:16:19+01:00. After the clean run, only two raw-database test-date fixtures were made relative to PostgreSQL's actual Lagos date, to keep database-boundary assertions valid after the fixed-clock anchor date passes. All six were rerun; production/migration code did not change after the clean verification.
+5. `git diff --check`: passed. `git diff --exit-code -- src/main/resources/db/migration/V1__mvp_foundation.sql src/main/resources/db/migration/V2__report_and_location_contract.sql pom.xml src/main/java/com/tesa/ekowatch/auth` returned 0. V1 SHA256 49DF002EDAB7F243C4815774375699809E87336454E0854313B6ECDECA764175; V2 8ECDC97077E460D007B83A433B241070F831E8630049F2E40985DB93B20878C8; new V3 1EEA2CCC85FA0CABE86AF166259D2A33AB9B8EF8F33E36081D40531ACE7FA780.
+
+Full clean suite: ApiUserDetailsServiceTest 2, AuthenticatedActorTest 1, SecurityConfigTest 3, CollectionControllerTest 1, CollectionMigrationTest 11, CollectionRulesTest 6, ModuleBoundaryTest 1, PostgresRulesTest 10, ReportControllerTest 7, ReportMigrationTest 4, RequestIdFilterTest 2, ResidentReportApiTest 10. Total 58. Reports are generated under target/surefire-reports; the collection-rule XML/text is from the later six-test rerun.
+
+## Evidence and limits
+
+CollectionMigrationTest proves fresh migration/cutover record, all COMPLETED/FAILED attempts and inactive/active weekly rows unchanged in explicit legacy tables, original completion UUID/time/actor backfill, exact historical prerequisite dates, exactly 30 expanded days, overlap handling, deterministic rerun without extra rows, canonical unique/composite FK rejection, ambiguous/no operator failure, explicit highest-UUID choice (no arbitrary first candidate), invalid historical role/assignment failure, conflicting effective mapping failure, date-specific override success, invalid active assignment refusal, unused dated mapping refusal, explicit historical report-occurrence mapping and future-data failure. Negative preflight tests assert old V2 structures/history remain after rollback, with no successful V3 row; no Flyway repair/reset is used.
+
+CollectionRulesTest proves Lagos midnight SCHEDULED/MISSED boundary without jobs/writes, DONE reads with retained missed reports (DISPUTED deliberately pending Step 6), actual missedReportCount, two concurrent same-actor completions returning one ID/time/row, repeats preserving timestamp after clock advance, refusal after ward assignment revocation, roles/ward/scheduled-operator checks, unscheduled/future/null/unknown refusals, 31-day inclusive range and invalid ranges, ward scope, distinct assigned streets, public schedule field allowlist with no operator performance, service rejection of nonelapsed/unscheduled missed reports and DB elapsed/FK checks. Direct future-completion database assertion supplies a matching future schedule, so it proves the date constraint rather than merely a missing FK.
+
+Existing rule tests retain self-confirmation/authority/resident checks, confirmation races/uniqueness/commit visibility and seed 0/1/2 counts. The obsolete duplicate-error/FAILED-write expectations were replaced by repeat-safe completion and retained-FAILED-history assertions as explicitly requested in Step 4. Existing collection-controller principal/delegation verifications were retained via incremental signature edits. A proposed whole-file test rewrite was rejected by automatic review before execution; the safe incremental edit preserved all existing principal/delegation checks. No valid assertion was weakened or test skipped.
+
+ResidentReportApiTest now provisions a dated occurrence for its valid MISSED_PICKUP fixture. ReportMigrationTest still tests V1->V2 note/history constraints, then applies V3 before starting the current JPA context. Application/report/collection tests confirm JPA validation and cross-module API boundaries with the new entity (Pickup.class is absent after compilation). Runtime services query only canonical dated tables; only migrations, historical fixtures and retained existing HTTP path strings use legacy pickup vocabulary. Authentication/security and previous report/HTTP tests remain passing. Controller tests are principal/delegation contract tests, not a new claim of full HTTP authorization or live integration.
+
+Expected preflight-failure/rollback logs occurred in negative tests. Non-fatal Mockito/JVM dynamic-agent and cached Hikari-pool warnings following old test-container teardown occurred; all final tests passed with zero skips/errors. No performance numbers or shared-data inspection results are claimed. DemoSeed guards remain untouched; seven compatible stable-anchor dated rows are insert-only and tested for repeatability, with final Step 8 expansion still pending. Photo adapter/credentials remain Esther's integration work.
+
+Cutover inputs and review/recovery procedure are in engineer-a-handoff.md; exact methods/views/columns are in data-contract.md. Ambiguous historical data requires an explicit verified mapping/remediation, never guessing, truncation or disposal. No Step 5 reconfirmation, Step 6 disputes/dashboard, Step 7 idempotency or Step 8 expansion was implemented.
+
+Changed file inventory (pre-existing untracked ekobridge-project.zip excluded):
+
+- docs/engineer-a-verification.md- docs/data-contract.md
+- docs/engineer-a-handoff.md
+- src/main/java/com/tesa/ekowatch/collection/api/CollectionApi.java
+- src/main/java/com/tesa/ekowatch/collection/api/CollectionScheduleView.java
+- src/main/java/com/tesa/ekowatch/collection/api/CollectionStatus.java
+- src/main/java/com/tesa/ekowatch/collection/api/CollectionView.java
+- src/main/java/com/tesa/ekowatch/collection/domain/CollectionRecord.java
+- src/main/java/com/tesa/ekowatch/collection/domain/CollectionSchedule.java
+- src/main/java/com/tesa/ekowatch/collection/domain/Pickup.java
+- src/main/java/com/tesa/ekowatch/collection/service/CollectionService.java
+- src/main/java/com/tesa/ekowatch/collection/web/CollectionController.java
+- src/main/java/com/tesa/ekowatch/report/service/ReportService.java
+- src/main/java/com/tesa/ekowatch/shared/ApiExceptionHandler.java
+- src/main/resources/application.yml
+- src/main/resources/db/demo/demo.sql
+- src/main/resources/db/migration/V3__dated_collections.sql
+- src/test/java/com/tesa/ekowatch/collection/web/CollectionControllerTest.java
+- src/test/java/com/tesa/ekowatch/CollectionMigrationTest.java
+- src/test/java/com/tesa/ekowatch/CollectionRulesTest.java
+- src/test/java/com/tesa/ekowatch/PostgresRulesTest.java
+- src/test/java/com/tesa/ekowatch/ReportMigrationTest.java
+- src/test/java/com/tesa/ekowatch/ResidentReportApiTest.java
+
+---
+
 # Merged integration verification - 31 October 2026
 
 Cause: dev/branch had V1-era Report.description, old ReportApi create/get/list methods, old ReportService description SQL, DTOs and demo SQL. The completed Steps 2-3 files (including source V2, build.md and data-contract.md) were absent, while target/classes/db/migration still contained V2 renaming description to note. Hibernate consequently expected a column that the migrated schema did not have. A clean build was required to prove the fix does not depend on stale generated resources.

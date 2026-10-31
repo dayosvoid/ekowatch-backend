@@ -32,7 +32,7 @@ class ReportMigrationTest {
 
     Flyway flyway(String target) {
         return Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema)
-                .locations("classpath:db/migration").target(target).load();
+                .locations("classpath:db/migration").placeholders(Map.of("collectionCutoverDate","AUTO","collectionMigrationMapping","[]")).target(target).load();
     }
 
     void baseRows() {
@@ -88,6 +88,7 @@ class ReportMigrationTest {
             assertEquals(new HashSet<>(before.get(table)), new HashSet<>(after), table);
         }
         assertEquals(0, flyway("2").migrate().migrationsExecuted);
+        flyway("4").migrate();
         try (var context = new SpringApplicationBuilder(EkoWatchApplication.class).web(WebApplicationType.NONE).run(
                 "--spring.datasource.url=" + url, "--spring.datasource.username=" + pg.getUsername(),
                 "--spring.datasource.password=" + pg.getPassword(), "--spring.jpa.hibernate.ddl-auto=validate",
