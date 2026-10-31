@@ -24,4 +24,8 @@ public class UserAccount {
     private String role;
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
+    @Column(name = "ward_id")
+    private UUID wardId;
+    @Column(name = "street_id")
+    private UUID streetId;
 }

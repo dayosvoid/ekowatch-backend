@@ -18,4 +18,8 @@ public class Street {
     private UUID wardId;
     @Column(name = "name", nullable = false)
     private String name;
+    @Column(name = "latitude")
+    private Double latitude;
+    @Column(name = "longitude")
+    private Double longitude;
 }

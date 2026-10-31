@@ -1,3 +1,21 @@
+# Merged integration repair - canonical note contract
+
+Verification: requested PostgresRulesTest passed 10 tests; mvn -B clean verify passed all 41 tests (0 failures/errors/skips), clean compilation and packaging at 2026-10-31T11:53:11+01:00. Full file inventory and actual command evidence are in engineer-a-verification.md.
+
+The current data contract is docs/data-contract.md, restored from dayo/data-rules (6b9c51bd4db453d927f028e45c6eac907ca76f6f). Earlier integration proposals below are historical where they differ. The merged dev/branch had reverted the report entity/service/DTOs/seed to V1 description, omitted V2 and the completed Steps 2-3 dependencies/tests/docs, and left V2 in generated target/classes. That mixed resource/code state explains Hibernate's missing-description error.
+
+Restored the existing Steps 2-3 data code and tests from that reference: Report.note explicitly maps @Column(name="note"), ReportService uses note and the canonical createReport/getReport/listReports methods, and ReportView has its full private canonical fields. Supporting photo/user/ward APIs/services, Location/Page/Clock and JPA preferences/coordinates mappings are restored, not newly designed. Old create/get/list service aliases are absent. The guarded transitional authorityReports read remains as documented until Step 6.
+
+V1 is untouched from the incoming dev branch. V2__report_and_location_contract.sql is restored byte-for-byte from dayo/data-rules (Git blob 664e384729264dd322ea38440467bedc1d65f6bd, SHA256 8ECDC97077E460D007B83A433B241070F831E8630049F2E40985DB93B20878C8). No applied migration was rewritten, no duplicate description column or Step 4 migration added, and Hibernate ddl-auto=validate remains enabled. Description is intentional only in V1, V2 preflight/rename, populated-V1 historical fixtures, and a negative JSON assertion. Compatible data/UUID/history preservation and incompatible-note preflight continue to be tested on disposable PostgreSQL. Existing shared databases were not inspected or reset.
+
+Esther's auth/security classes, ActorAccess.id(Authentication), DatabaseActorAccess, confirmation/collection controllers and auth tests are preserved. ReportController keeps /api/reports and /api/reports/{reportId}, and resolves the trusted principal through actors.id(authentication). It now takes report.api.CreateReportRequest (reportType, streetId, note, optional photoId/location/collectionDate), calls createReport/getReport, and lists using required wardId with optional street/type/flood filters, page/size and ReportSort. The response is Page<ReportView>. There is no actorId/reporterId/wardId in the create DTO and no description alias. Existing HTTP advice now recognizes VALIDATION_FAILED as 400 and RESOURCE_NOT_FOUND as 404 while retaining its other handlers.
+
+ReportControllerTest retains principal/delegation coverage, strengthens blank-note refusal and adds actual MockMvc binding/serialization/error/default-pagination checks, including ignoring a client actorId in favour of the principal and excluding private response fields. Existing PostgreSQL assertions are restored without weakening rules. The original pom.xml conflict-resolution edit belongs to the user and remains untouched; no dependency was added by this repair.
+
+No authentication/session, upload/storage, dashboard, dated schedules, collection completion or Step 4 feature was added. Esther's photo URL/sanitisation adapter and other handoff items in data-contract.md still apply. Requested verification results and any encountered failures are recorded in engineer-a-verification.md. No commit/push/deployment.
+
+---
+
 # Engineer A handoff — Monday MVP
 
 Working branch: `dayo/data-rules`. Integration target: `dev/branch`.
