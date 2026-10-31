@@ -26,7 +26,9 @@ import static org.junit.jupiter.api.Assertions.*;
 @Testcontainers
 class PostgresRulesTest {
     @Container
-    static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:17-alpine");
+    // Disposable PostgreSQL uses plaintext; do not negotiate SSL through Docker's port mapping.
+    static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:17-alpine")
+            .withUrlParam("sslmode", "disable");
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry r) {
@@ -65,7 +67,7 @@ class PostgresRulesTest {
         street = UUID.randomUUID();
         db.update("insert into wards(id,name) values (?,?)", ward, "Ward " + ward);
         db.update("insert into streets(id,ward_id,name) values (?,?,?)", street, ward, "Test street");
-        report = reports.create(reporter, ward, street, "Blocked drain").id();
+        report = reports.createReport(reporter, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "Blocked drain", null, null, null)).reportId();
     }
 
     List<String> race(UUID first, UUID second) throws Exception {
@@ -93,7 +95,7 @@ class PostgresRulesTest {
     @Test
     void differentResidentsConcurrently() throws Exception {
         assertEquals(List.of("OK", "OK"), race(a, b));
-        assertEquals(2, reports.get(authority, report).confirmationCount());
+        assertEquals(2, reports.getReport(authority, report).confirmationCount());
     }
 
     @Test
@@ -101,7 +103,7 @@ class PostgresRulesTest {
         var results = race(a, a);
         assertEquals(1, Collections.frequency(results, "OK"));
         assertEquals(1, Collections.frequency(results, "DUPLICATE_CONFIRMATION"));
-        assertEquals(1, reports.get(authority, report).confirmationCount());
+        assertEquals(1, reports.getReport(authority, report).confirmationCount());
         try (var c = source.getConnection(); var s = c.prepareStatement("insert into confirmations(id,report_id,user_id) values (?,?,?)")) {
             s.setObject(1, UUID.randomUUID());
             s.setObject(2, report);
@@ -146,8 +148,30 @@ class PostgresRulesTest {
         violation("REPORT_NOT_ELIGIBLE", () -> confirmations.confirm(a, report));
         violation("FORBIDDEN", () -> reports.authorityReports(a, 10, 0));
         assertEquals(1, reports.authorityReports(authority, 10, 0).size());
-        violation("INVALID_REPORT", () -> reports.create(a, ward, street, " "));
-        violation("INVALID_LOCATION", () -> reports.create(a, UUID.randomUUID(), street, "Drain"));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, " ", null, null, null)));
+        violation("RESOURCE_NOT_FOUND", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, UUID.randomUUID(), "Drain", null, null, null)));
+    }
+
+    @Test
+    void reportNotesAreTrimmedAndLimitedThroughCanonicalRequest() {
+        var view = reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "  " + "x".repeat(1000) + "  ", null, null, null));
+        assertEquals("x".repeat(1000), view.note());
+        assertEquals("x".repeat(1000), db.queryForObject("select note from reports where id=?", String.class, view.reportId()));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "x".repeat(1001), null, null, null)));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, null, null, null, null)));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "\t\n ", null, null, null)));
+        String unicodeNote = "\uD83C\uDF0D".repeat(1000);
+        assertEquals(unicodeNote, reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, unicodeNote, null, null, null)).note());
+    }
+
+    @Test
+    void missingPhotoUrlAdapterNeverExposesStorageKey() {
+        UUID photoId = UUID.randomUUID();
+        db.update("insert into photos(id,owner_id,storage_key,content_type,size_bytes) values (?,?,'private-test-key','image/jpeg',100)", photoId, reporter);
+        var view = reports.createReport(reporter, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "Drain", photoId, null, null));
+        assertNull(view.photoUrl());
+        assertNull(reports.getReport(a, view.reportId()).photoUrl());
+        assertEquals(photoId, db.queryForObject("select photo_id from reports where id=?", UUID.class, view.reportId()));
     }
 
     @Test
@@ -170,7 +194,7 @@ class PostgresRulesTest {
         seed.execute(source);
         assertEquals(count, db.queryForObject("select count(*) from confirmations", Long.class));
         assertEquals(3, count);
-        var counts = db.queryForList("select (select count(*) from confirmations c where c.report_id=r.id) n from reports r where description like 'Fictional blocked drain %' order by r.id", Long.class);
+        var counts = db.queryForList("select (select count(*) from confirmations c where c.report_id=r.id) n from reports r where note like 'Fictional blocked drain %' order by r.id", Long.class);
         assertEquals(List.of(0L, 1L, 2L), counts);
         LocalDate yesterday = LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(1);
         assertFalse(collections.missed(authority, yesterday, yesterday).isEmpty());
@@ -184,9 +208,9 @@ class PostgresRulesTest {
             s.setObject(2, report);
             s.setObject(3, a);
             s.executeUpdate();
-            assertEquals(0, reports.get(authority, report).confirmationCount());
+            assertEquals(0, reports.getReport(authority, report).confirmationCount());
             c.commit();
-            assertEquals(1, reports.get(authority, report).confirmationCount());
+            assertEquals(1, reports.getReport(authority, report).confirmationCount());
         }
     }
 

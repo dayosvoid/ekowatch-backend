@@ -1,152 +1,79 @@
-# Engineer A handoff — Monday MVP
+# Steps 2-3 verification repair - 31 October 2026
 
-Working branch: `dayo/data-rules`. Integration target: `dev/branch`.
-Contracts below are proposals for Esther and Muizz to agree; no coordination message has been sent.
-No controllers or authentication have been implemented in this change.
+The subsequent 27-test/10-error run failed first during Flyway's JDBC connection: SocketTimeoutException while waiting for the SSL negotiation response (ConnectionFactoryImpl.enableSSL), SQLSTATE 08001. Later context failure-threshold messages were consequences. The original failure excerpt is preserved in engineer-a-verification.md; earlier success below remains historical evidence.
 
-## Schema and migration
+Only test transport changed: PostgresRulesTest, ResidentReportApiTest and ReportMigrationTest explicitly use sslmode=disable on their disposable, non-TLS PostgreSQL containers. Production connection/TLS settings, application code, V1/V2, constraints, canonical API contracts, seeds and all assertions are unchanged. No timeout or failure-threshold increase, skip, Step 4 work or new migration/backfill. No commit/push/deployment; previous working-tree changes remain preserved.
 
-`V1__mvp_foundation.sql` creates:
-- users: UUID ID, normalized unique email, password hash, display name, checked RESIDENT/OPERATOR/AUTHORITY role, creation timestamp.
-- wards: UUID ID, unique name, creation timestamp.
-- streets: ward FK, unique ward/name and ID/ward pair.
-- operator_wards: user/ward FKs and composite primary key prevents repeated assignment.
-- collection_schedules: street FK, ISO weekday 1–7, active flag, unique street/weekday.
-- pickups: street/user FKs, date, checked COMPLETED/FAILED status; named `uq_pickup_street_date` enforces one attempt per street/date.
-- reports: reporter/ward FKs, composite street/ward FK prevents mismatched locations, BLOCKED_DRAIN type, nonblank description up to 2000 characters, OPEN/RESOLVED/REJECTED status, creation/update timestamps.
-- confirmations: report/user FKs; named `uq_confirmation_report_user` enforces one resident confirmation per report.
+Requested order verified: mvn -B '-Dtest=PostgresRulesTest' test passed all 10 tests (01:43 min, finished 10:48:59+01:00), then mvn -B verify passed all 27 tests, zero failures/errors/skips, and packaging/repackaging (03:39 min, finished 10:53:00+01:00). Both used disposable PostgreSQL 17.11 with Flyway and Hibernate validation. git diff --check passed. Esther's Step 3 integration handoff remains unchanged; this setting applies only to isolated test databases.
 
-All timestamps are PostgreSQL timestamptz. UUIDs originate in application/demo code.
-FK indexes support street, reporter, ward, user and recorder lookup. Unique indexes cover report counts, schedules and pickups.
-A report update trigger refreshes updated_at. No cascading deletion is provided.
-Flyway owns DDL; Hibernate `ddl-auto: validate` checks mapped tables at startup. All eight tables have JPA mappings, but transactional services use JdbcTemplate for explicit PostgreSQL insert-on-conflict behavior and aggregate projections. There is no mutable cached confirmation counter.
+---
 
-Roles on operator assignments and reporter/confirmation/pickup rows are enforced by services, not cross-table SQL role constraints.
-Direct database writes must remain restricted to trusted code and migrations.
+# Step 3 handoff - resident setup and private report APIs
 
-## Public module APIs
+Verification: mvn -B verify passed all 27 tests (0 failures/errors/skips) and packaged successfully at 2026-10-31T10:02:21+01:00. git diff --check passed. Earlier test-import failure and complete commands/output are preserved in engineer-a-verification.md.
 
-Inject interfaces, never another module's service/domain/repository:
-- `report.api.ReportApi.create(actorId, wardId, streetId, description)` → ReportView.
-- `ReportApi.get(actorId, reportId)` → ReportView.
-- `ReportApi.list(actorId, limit, offset)` → List<ReportView>.
-- `ReportApi.authorityReports(actorId, limit, offset)` → List<ReportView>, authority only.
-- `ReportApi.requireConfirmable(reportId, actorId)` is an inter-module eligibility operation used within confirmation's transaction; not an endpoint.
-- `confirmation.api.ConfirmationApi.confirm(actorId, reportId)` → void after transactional commit.
-- `collection.api.CollectionApi.recordPickup(actorId, streetId, date, status)` → void.
-- `CollectionApi.missed(authorityId, from, through)` → List<MissedPickup>.
-- `user.api.ActorAccess` validates stored actor existence/role.
+The current exact methods, DTO fields, enum values and defaults are in the Step 3 section of data-contract.md. All actorId arguments are private verified-principal inputs, never client JSON. Wire WardApi.listWards/listStreets, UserApi.getCurrentUser/updateMyPreferences, ReportApi.createReport/getReport/listReports and PhotoApi.getPhoto. No HTTP paths/controllers/OpenAPI were added. create/get/list aliases are gone and every caller is updated. The pre-existing authorityReports guard and its assertions remain until Step 6 replaces that read; do not use it as the canonical MVP target. No authority dashboard queries or Step 4 work were implemented.
 
-Actors must come from Esther's verified principal. UUID parameters are trusted internal inputs, not authentication credentials. Never bind actorId/reporterId/userId from request JSON or an arbitrary header.
-Read endpoints currently allow any stored authenticated user; the authority-specific operation checks AUTHORITY.
-Only a RESIDENT can report/confirm; self-confirmation and non-OPEN reports are rejected.
-No ward-residency restriction exists in the agreed minimum schema.
+ReportView is the full canonical private projection: no reporter identity, lifecycle status, updatedAt or submitted coordinates. mapLocation uses public street coordinates only; note is trimmed and limited to 1000 Unicode characters. Creation derives ward/reporter/time from stored street, trusted actor and injected UTC Clock. Optional photo must be owned by the actor, including when already attached elsewhere. Confirmation counts and confirmedByMe query real rows. lastEvidenceAt uses stored report/confirmation times; six-hour flood status is computed on reads, with expiry inclusive for EXPIRED. Reads never renew evidence. Confirm/reconfirm changes remain Step 5.
 
-Confirmation uses READ COMMITTED, shared report row locking and INSERT ON CONFLICT against the named unique constraint. Different residents can hold compatible shared locks. Concurrent repeated resident inserts yield one committed success and one DUPLICATE_CONFIRMATION. No unique-violation exception is swallowed inside an aborted transaction.
-Counts use a SQL count of confirmation rows and exclude other transactions' uncommitted inserts. Fetch a fresh ReportView after confirm returns. A count may increase immediately afterward as another resident commits.
+Resident preferences require matching non-null ward/street and cannot modify another account or be updated by operators/authorities. Existing unset preferences remain null. Reports may select a street outside home preferences; the street defines the ward. Listing requires explicit wardId, with validated optional street/type/flood filters and page/size defaults 0/20 (size 1-100). The full-team plan is absent from repository/ZIP; the documented ordering choice is CONFIRMATIONS by default, then newest/UUID; NEWEST uses creation time/UUID. Esther should reconcile that choice if the missing plan is later supplied.
 
-## Proposed HTTP contract (Esther owns implementation)
+PhotoUrlResolver is an internal optional hook for Esther's trusted sanitised storage adapter, not an upload flow. It resolves private storage keys without exposing them. Until that adapter is wired, photoUrl is null even for a valid persisted attachment. PhotoApi.getPhoto exposes metadata to owner or as attached public evidence, with no ownerId/storageKey. No demo asset was fabricated, and no sanitisation, MIME/size upload policy or HTTP access behaviour is claimed. Esther still owns metadata stripping, storage/upload, credentials/password encoder, authentication, HTTP DTO parsing/validation/error mapping, final OpenAPI and frontend integration. Canonical enums and UUIDs must be parsed before service invocation; server principal supplies actorId separately. There is no idempotency argument until Step 7.
 
-| Endpoint | Authorization | Request | Success |
-| --- | --- | --- | --- |
-| POST /reports | RESIDENT | {wardId, streetId, reportType: "BLOCKED_DRAIN", description} | 201 ReportView + Location |
-| GET /reports?limit=20&offset=0 | authenticated | limit 1–100, offset >=0 | 200 ReportView[] |
-| POST /reports/{reportId}/confirmations | RESIDENT | empty body | 201; optionally fresh ReportView |
-| GET /reports/{reportId} | authenticated | UUID path | 200 ReportView |
-| GET /authority/reports?limit=20&offset=0 | AUTHORITY | same paging | 200 ReportView[] |
+Migration/backfill: none in Step 3. V1 and V2 are untouched; no database reset/shared connection. Role-backed user/report entity data and stable UUIDs/history remain. The prior V2 incompatible-note preflight and later weekly/FAILED/operator-mapping hazards remain as documented. Seed SQL stays compatible and unchanged from Step 2; Step 8 expansion remains pending. PostgreSQL tests use only disposable Testcontainers. Full actual commands/results are in engineer-a-verification.md; no HTTP/live-demo success is claimed.
 
-ReportView JSON: `{id, reporterId, wardId, streetId, reportType, description, status, createdAt, updatedAt, confirmationCount}`.
-Use UUID strings, ISO-8601 UTC timestamps and numeric counts. Reporter IDs are included; no email/hash is exposed.
-Reject unsupported reportType at the controller boundary; create currently supports only blocked drains.
-Proposed errors: `{code, message, requestId}`. Never expose SQL or credentials.
+Step 3 files: report/api (ReportApi, ReportView, CreateReportRequest, ReportType, FloodStatus, ReportSort), Report domain enum mapping and ReportService; new user/api UserApi/CurrentUserView/Role and UserService; new ward/api WardApi/WardView/StreetView and WardService; photo/api PhotoApi/PhotoView/PhotoUrlResolver and PhotoService; shared Location/Page/TimeConfiguration; updated PostgresRulesTest and ModuleBoundaryTest (photo included), new ResidentReportApiTest; data-contract.md, this handoff and verification notes. Prior uncommitted Step 1/2 changes and user files remain preserved. No commit, push or deployment.
 
-| RuleViolation code | Proposed HTTP |
-| --- | --- |
-| FORBIDDEN | 403 |
-| REPORT_NOT_FOUND | 404 |
-| DUPLICATE_CONFIRMATION, DUPLICATE_PICKUP | 409 |
-| REPORT_NOT_ELIGIBLE, SELF_CONFIRMATION | 409 |
-| INVALID_REPORT, INVALID_LOCATION, INVALID_PAGE, INVALID_PICKUP, INVALID_DATE_RANGE | 400 |
+---
 
-Authentication failures → 401 at Esther's security layer. Malformed UUID/JSON → 400.
-Unexpected integrity failures → sanitized 500; do not map every integrity exception to duplicate.
-Esther must add controllers, Bean Validation, Spring Security, exception advice, authentication tests and final OpenAPI agreement with Muizz.
-RequestIdFilter runs at highest servlet precedence so security-generated errors retain the correlation header; verify this in the final security integration.
+# Step 2 handoff - persistence and compatibility
 
-## Collection rules and limits
+Current schema is V2__report_and_location_contract.sql after unchanged V1; the Step 1 handoff below is historical baseline/target context. Step 2 adds four-type report persistence, note, photo/date/private coordinates, public street coordinates, paired resident preferences and photos with JPA mappings. Coordinates are double precision / nullable Double. Existing ReportApi and ReportView remain unchanged until Step 3; only service SQL maps description from the renamed note. New notes are trimmed and limited to 1000 Unicode characters. No public coordinate or photo response was added.
 
-Assigned operators may record COMPLETED or FAILED pickups up to today's Lagos date.
-The unique street/date rule covers both statuses: a failed record cannot be retried through this API. Agree a correction workflow separately.
-Missed pickups are derived, never stored: active scheduled weekday and no COMPLETED pickup on a fully elapsed date.
-Authority query allows at most 367 inclusive dates (difference <=366), excludes today/future dates, and uses Africa/Lagos.
-Schedules have no effective-date history; changing active/weekday changes historical derived results. No schedule-management API is included.
+Migration implications: legacy notes incompatible with the 1-1000-character trimmed constraint fail preflight before DDL. Explicit remediation is required; no truncation or automatic rewriting. Valid old rows, UUIDs, lifecycle/history and timestamps are preserved; new optional values stay null. Weekly schedules and FAILED history are untouched, with their previously documented Step 4 hazards still pending. No schedule-date FK until Step 4. Deploy nothing from this work; test migration against an authorised isolated copy before any later real cutover. PostgreSQL transactional rollback on a failed preflight was tested; this does not mean Flyway provides automatic undo after a successful migration.
 
-## Local configuration and opt-in seed
+Esther: supply storage_key only from a trusted metadata-stripping/sanitising adapter. photos has required owner FK, nonblank storage key/content type and positive size, but no upload flow, MIME allowlist or maximum-size policy here. Do not infer sanitisation from the presence of a metadata row. No demo photo asset was provisioned. Step 3 will add owner validation in report creation and canonical private DTOs/preferences; do not treat the retained old DTO as the final public contract. actorId remains a private trusted-principal input, and existing role/location checks remain enforced. No controllers, auth, HTTP advice, frontend or Step 3 work was added.
 
-Environment: DB_URL (default jdbc:postgresql://localhost:5434/ekowatch), DB_USERNAME (default ekowatch), DB_PASSWORD, PORT (default 8081).
-Preserved the user's existing datasource defaults; set DB_PASSWORD explicitly outside local use.
-No local database or unrelated project database was used by verification.
+Step 2 changed files: V2 migration; Report, UserAccount and Street mappings; new photo/domain/Photo.java; ReportService; demo.sql; PostgresRulesTest; new ReportMigrationTest; data-contract.md, this handoff and verification notes. pom.xml, V1, application.yml and existing interfaces are unchanged. Prior working-tree documentation and untracked user files are preserved. Actual verification results are recorded in engineer-a-verification.md.
 
-PowerShell local demo (only an isolated local EkoWatch database):
-```powershell
-$env:DB_URL = 'jdbc:postgresql://localhost:5434/ekowatch'
-$env:DB_USERNAME = 'ekowatch'
-$env:DB_PASSWORD = '<your local password>'
-$env:SPRING_PROFILES_ACTIVE = 'local-demo'
-$env:EKOWATCH_DEMO_ENABLED = 'true'
-mvn spring-boot:run
-```
+---
 
-Both local-demo profile and explicit demo flag are required. prod/production profiles block the runner.
-Do not enable local-demo or demo flag in deployment configuration.
-Seed is transactional and insert-only with fixed UUIDs and ON CONFLICT DO NOTHING. It does not overwrite existing rows; reserved demo IDs must not be reused.
-Fictional demo accounts demo1–demo3 are residents, demo4 operator, demo5 authority, all @example.invalid.
-Demo passwords are deliberately disabled (`!DEMO_LOGIN_DISABLED`), not working hashes. Esther must provision local credentials with her configured password encoder to demonstrate login; never reuse production credentials.
-Seed supplies a fictional ward/street, all seven scheduled days, reports with 0/1/2 confirmations and no pickup yesterday, ensuring a missed-pickup example.
-For a clean showcase use a fresh local database; repeat seeding preserves subsequent demo interactions.
+# Engineer A handoff — canonical target and V1 baseline
 
-## Logging
+Step 1, 31 October 2026. The single target is [data-contract.md](data-contract.md), transcribed from [build.md](../build.md). It supersedes all previous contract proposals in this handoff. No coordination message has been sent. No controllers, HTTP paths, OpenAPI, authentication, application changes or DDL were introduced in this step.
 
-RequestIdFilter validates X-Request-Id as 1–64 ASCII letters/digits/dot/underscore/hyphen, otherwise creates a UUID.
-Echoes response header and sets SLF4J MDC requestId, restoring previous MDC in finally even on failure.
-Existing logging is preserved with requestId added to the level pattern. No body, password, token or secret is logged.
-Async execution requires explicit MDC propagation if introduced later.
+## Current-versus-target migration
 
-## Verification
+Current: V1 only, eight JPA-mapped tables, JdbcTemplate services, PostgreSQL and Hibernate validation. Reports are BLOCKED_DRAIN/description with private identity currently exposed in ReportView and stored lifecycle status; confirmations reject repeats; schedules are weekly; pickups store COMPLETED/FAILED attempts. The dashboard module is empty. These are compatibility facts, not the desired API.
 
-```powershell
-mvn -B verify
-mvn -B '-Dtest=PostgresRulesTest' test
-```
+Target: reports.note and four types, private photo/submitted coordinates, street-only public location, canonical ReportView without reporter identity/lifecycle status, paired resident preferences, report_confirmations/ReportConfirmation, dated collection_schedules, collections/CollectionRecord, authority and photo APIs. Confirmation and completion repeats become safe; freshness/disputes are derived. No aliases or optional correction/resolution workflow. See the contract for exact column/member maps, full response fields, existing signatures and later-step ownership.
 
-Docker is required. Tests fail rather than silently skip if Docker is unavailable.
-PostgresRulesTest starts a disposable postgres:17-alpine container with dynamic datasource properties; never points at ekowatch-db or production.
-A two-thread start barrier drives races; successful service returns mean transactions committed. Futures have timeouts.
-Constraint demonstration removes/restores uniqueness on a temporary LIKE-confirmations table inside disposable PostgreSQL, retaining the primary key; no shared/domain constraint is removed.
-Tests assert SQLSTATE 23505 for restored constraint and direct duplicate inserts. See docs/engineer-a-verification.md for actual run evidence.
+Never edit V1 or an applied migration. Next migration is V2__report_and_location_contract.sql if still unused, in Step 2 only. Preserve existing records, stable UUIDs, lifecycle history and timestamps. Step 4 retains weekly schedules and all pickup attempts in explicitly named legacy tables; only COMPLETED attempts backfill into collections with original IDs/times. No legacy JPA queries remain after that switch.
 
-## Changed files
+Migration gates: inspect notes longer than 1000 characters (V1 allows 2000), FAILED history, weekly schedule cutover, historical operator validity and wards with zero/multiple possible operators. Static demo inspection finds short notes, no pickups and one operator; this says nothing about a populated real database. Ambiguous data requires an explicit mapping and must not be guessed, truncated or discarded. Never choose the first operator UUID. Define a Lagos cutover boundary and 30-day expansion horizon; create historical occurrences only as prerequisites for actual completions. Fail preflight on unresolved mappings/conflicts. Detailed prerequisite checks and empty/populated disposable PostgreSQL migration assertions are in data-contract.md. No shared/live database was inspected or reset. Flyway Community does not automatically undo migrations; later migration work requires a reviewed recovery plan.
 
-Created: V1 migration; db/demo/demo.sql; public ReportApi/ReportView, ConfirmationApi, CollectionApi, ActorAccess; their services; eight entity mappings; RuleViolation, RequestIdFilter, DemoSeed; PostgresRulesTest and RequestIdFilterTest; handoff and verification documents.
-Modified: ModuleBoundaryTest replaces placeholder with enforced internal-package boundaries; application.yml adds MDC logging while preserving existing datasource changes; .env.example aligns local database port/user; README/architecture update scaffold status.
-pom.xml already had uncommitted user changes and all required dependencies; no dependency was added.
+## Esther's integration target
 
-## Monday blockers and integration
+Wire interfaces through api packages only. Internal actorId values are private inputs from the trusted principal, never client JSON or arbitrary headers. Services retain role and ward enforcement. UUIDs become strings at HTTP boundaries, instants use UTC, calendar dates use Africa/Lagos; keep DTOs separate from entities.
 
-Data/rules are usable through Spring interfaces. HTTP, login, authorization wiring, DTO validation/error advice, final frontend contracts and deployment remain Esther's work.
-No endpoint/auth behavior has been tested because controllers/authentication do not yet exist.
-Agree self-confirmation prohibition, OPEN-only eligibility, authenticated read visibility, response envelopes/paging, and pickup correction semantics before integration.
-No commit, push, merge, production connection or shared-branch modification was performed.
+Canonical methods: WardApi.listWards/listStreets; UserApi.getCurrentUser/updateMyPreferences; ReportApi.createReport/getReport/listReports/listWardHazards; ConfirmationApi.confirmReport; CollectionApi.listCollectionSchedules/listMyAssignedStreets/recordCollection; AuthorityApi.getWardDashboard; PhotoApi.getPhoto. Internal report.api locking collaboration is not an endpoint. These target APIs are not all implemented today; data-contract.md identifies the current exact signatures. Do not wire the old authorityReports/description/status/reporterId response as the MVP target.
 
-After review and explicit approval only:
-```powershell
-git switch dayo/data-rules
-git diff --check
-git add .env.example README.md docs/architecture.md docs/engineer-a-handoff.md docs/engineer-a-verification.md src/main/java src/main/resources src/test/java
-git diff --cached
-git commit -m "Implement EkoWatch MVP schema and transactional data rules"
-git push -u origin dayo/data-rules
-```
+Canonical views: CreateReportRequest, ReportView, CollectionScheduleView, CollectionView, WardHazardsView, WardDashboardView, OperatorPerformanceView, CurrentUserView, WardView, StreetView, PhotoView, Page<T>. build.md leaves some auxiliary view fields and target argument ordering unspecified; those gaps are explicitly marked in the contract, not replaced by competing proposals.
 
-pom.xml is deliberately omitted from staging because its existing edits belong to the user; review and stage it separately if desired.
-Do not merge dev/branch without permission.
+Report creation derives ward/reporter, accepts note/street/type and optional photo/location/collectionDate. Step 7 adds a separate typed UUID idempotency argument mapped from Idempotency-Key, with atomic 24-hour snapshot replay. Photo upload/storage orchestration and metadata stripping belong to Esther: persist only a trusted sanitised reference, enforce ownership, never fabricate URLs or claim raw assets are sanitised. Public map coordinates come only from streets. Never expose password hashes, reporter identity or submitted coordinates.
+
+Esther owns authentication, password-encoder integration, controllers, validation at HTTP boundaries, sanitised exception mapping, final OpenAPI, frontend integration and deployment. Canonical RuleViolation codes are listed in data-contract.md; old implementation error codes are not final HTTP agreement. AUTHORITY protects performance metrics. HTTP wrong-role/security tests remain hers; no endpoint or login success has been demonstrated.
+
+## Demo and operational limits
+
+DemoSeed still requires local-demo plus ekowatch.demo.enabled=true, excludes prod/production, and uses transactional insert-only fixed-UUID SQL. Existing fixture: one fictional ward/street, five users (three residents, one operator, one authority), seven weekly days, three reports with 0/1/2 confirmations. Passwords are !DEMO_LOGIN_DISABLED, not working login hashes. Esther must deliberately provision encoder-compatible demo credentials; do not enable demo seeding in deployments. Step 8 expansion remains pending; reruns must retain user actions and original evidence times. No fake sanitised photo asset exists.
+
+RequestIdFilter validates/echoes correlation IDs, sets/restores MDC, and runs at highest precedence; Esther must verify correlation survives final security errors. Do not log notes, identities, coordinates or secrets. Current application.yml requires DB_URL/DB_USERNAME/DB_PASSWORD; historical datasource-default claims do not describe this snapshot. No environment values were read or printed.
+
+## Actual Step 1 verification
+
+Latest `mvn -B verify` with approved cache/Docker access: BUILD SUCCESS, exit 0, total time 02:01 min, finished 2026-10-31T09:27:05+01:00. Java 25.0.4.1, Maven 3.9.16 and Spring Boot 3.5.7 unchanged. ModuleBoundaryTest 1, PostgresRulesTest 8 and RequestIdFilterTest 2 all passed: 11 tests, 0 failures/errors/skips. Flyway applied V1 to an empty disposable postgres:17-alpine database (PostgreSQL 17.11); Hibernate initialized with ddl-auto=validate. Rules/races, seed repeatability, packaging and repackaging succeeded. Existing classes were up to date; this was not a clean compilation.
+
+Earlier cache-access and unavailable-Docker failures remain recorded in [engineer-a-verification.md](engineer-a-verification.md), alongside actual successful output. No shared/live database was used. This confirms V1 only, not future migration/backfill paths or HTTP/authentication behaviour. Migration prerequisites and Esther's integration responsibilities above remain pending.
+
+Changed in Step 1: docs/data-contract.md, this handoff and docs/engineer-a-verification.md only. No tests/seeds need compatibility edits because runtime contracts are unchanged. Existing untracked build.md and ekobridge-project.zip are preserved. No commit, push or deployment. Step 2 has not begun.
