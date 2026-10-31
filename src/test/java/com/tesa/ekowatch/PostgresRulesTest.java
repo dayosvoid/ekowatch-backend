@@ -57,7 +57,7 @@ class PostgresRulesTest {
 
     @BeforeEach
     void setup() {
-        db.execute("truncate confirmations,reports,pickups,collection_schedules,operator_wards,streets,wards,users cascade");
+        db.execute("truncate report_confirmations,reports,collections,collection_schedules,legacy_pickups,legacy_collection_schedules,operator_wards,streets,wards,users cascade");
         reporter = user("RESIDENT");
         a = user("RESIDENT");
         b = user("RESIDENT");
@@ -80,7 +80,7 @@ class PostgresRulesTest {
                     ready.countDown();
                     if (!start.await(10, TimeUnit.SECONDS)) throw new AssertionError("start timeout");
                     try {
-                        confirmations.confirm(actor, report);
+                        confirmations.confirmReport(actor, report);
                         return "OK";
                     } catch (RuleViolation e) {
                         return e.code();
@@ -101,10 +101,9 @@ class PostgresRulesTest {
     @Test
     void sameResidentConcurrently() throws Exception {
         var results = race(a, a);
-        assertEquals(1, Collections.frequency(results, "OK"));
-        assertEquals(1, Collections.frequency(results, "DUPLICATE_CONFIRMATION"));
+        assertEquals(List.of("OK", "OK"), results);
         assertEquals(1, reports.getReport(authority, report).confirmationCount());
-        try (var c = source.getConnection(); var s = c.prepareStatement("insert into confirmations(id,report_id,user_id) values (?,?,?)")) {
+        try (var c = source.getConnection(); var s = c.prepareStatement("insert into report_confirmations(id,report_id,resident_id) values (?,?,?)")) {
             s.setObject(1, UUID.randomUUID());
             s.setObject(2, report);
             s.setObject(3, a);
@@ -118,18 +117,26 @@ class PostgresRulesTest {
     void isolatedConstraintEvidence() throws Exception {
         // DDL is confined to a temporary table in this disposable Testcontainers database.
         try (var c = source.getConnection(); var s = c.createStatement()) {
-            s.execute("create temporary table constraint_evidence (like confirmations including all)");
-            s.execute("alter table constraint_evidence drop constraint constraint_evidence_report_id_user_id_key");
+            s.execute("create temporary table constraint_evidence (like report_confirmations including all)");
+            // Renamed source indexes need not produce a predictable cloned constraint name.
+            String uniqueName;
+            try (var constraints = s.executeQuery("select conname,pg_get_constraintdef(oid) from pg_constraint where conrelid='pg_temp.constraint_evidence'::regclass and contype='u'")) {
+                assertTrue(constraints.next());
+                uniqueName = constraints.getString(1);
+                assertEquals("UNIQUE (report_id, resident_id)", constraints.getString(2));
+                assertFalse(constraints.next());
+            }
+            s.execute("alter table pg_temp.constraint_evidence drop constraint \"" + uniqueName.replace("\"", "\"\"") + "\"");
             String values = "'" + report + "','" + a + "'";
-            s.executeUpdate("insert into constraint_evidence(id,report_id,user_id) values ('" + UUID.randomUUID() + "'," + values + "),('" + UUID.randomUUID() + "'," + values + ")");
+            s.executeUpdate("insert into constraint_evidence(id,report_id,resident_id) values ('" + UUID.randomUUID() + "'," + values + "),('" + UUID.randomUUID() + "'," + values + ")");
             try (var r = s.executeQuery("select count(*) from constraint_evidence")) {
                 r.next();
                 assertEquals(2, r.getInt(1));
             }
             s.execute("truncate constraint_evidence");
-            s.execute("alter table constraint_evidence add constraint evidence_unique unique(report_id,user_id)");
-            s.executeUpdate("insert into constraint_evidence(id,report_id,user_id) values ('" + UUID.randomUUID() + "'," + values + ")");
-            var e = assertThrows(java.sql.SQLException.class, () -> s.executeUpdate("insert into constraint_evidence(id,report_id,user_id) values ('" + UUID.randomUUID() + "'," + values + ")"));
+            s.execute("alter table constraint_evidence add constraint evidence_unique unique(report_id,resident_id)");
+            s.executeUpdate("insert into constraint_evidence(id,report_id,resident_id) values ('" + UUID.randomUUID() + "'," + values + ")");
+            var e = assertThrows(java.sql.SQLException.class, () -> s.executeUpdate("insert into constraint_evidence(id,report_id,resident_id) values ('" + UUID.randomUUID() + "'," + values + ")"));
             assertEquals("23505", e.getSQLState());
             System.out.println("Restored constraint SQLSTATE=" + e.getSQLState());
         }
@@ -141,11 +148,14 @@ class PostgresRulesTest {
 
     @Test
     void eligibilityAndAuthorityRules() {
-        violation("SELF_CONFIRMATION", () -> confirmations.confirm(reporter, report));
-        violation("FORBIDDEN", () -> confirmations.confirm(authority, report));
-        violation("REPORT_NOT_FOUND", () -> confirmations.confirm(a, UUID.randomUUID()));
+        violation("SELF_CONFIRMATION_NOT_ALLOWED", () -> confirmations.confirmReport(reporter, report));
+        violation("FORBIDDEN", () -> confirmations.confirmReport(authority, report));
+        violation("RESOURCE_NOT_FOUND", () -> confirmations.confirmReport(a, UUID.randomUUID()));
         db.update("update reports set status='RESOLVED' where id=?", report);
-        violation("REPORT_NOT_ELIGIBLE", () -> confirmations.confirm(a, report));
+        // Legacy lifecycle history is retained, not an MVP confirmation workflow.
+        var historyBefore = db.queryForMap("select status,updated_at from reports where id=?", report);
+        assertEquals(1, confirmations.confirmReport(a, report).confirmationCount());
+        assertEquals(historyBefore, db.queryForMap("select status,updated_at from reports where id=?", report));
         violation("FORBIDDEN", () -> reports.authorityReports(a, 10, 0));
         assertEquals(1, reports.authorityReports(authority, 10, 0).size());
         violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, " ", null, null, null)));
@@ -175,34 +185,34 @@ class PostgresRulesTest {
     }
 
     @Test
-    void pickupsAndMissedCollections() {
-        LocalDate day = LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(1);
-        db.update("insert into operator_wards values (?,?)", operator, ward);
-        db.update("insert into collection_schedules(id,street_id,scheduled_day) values (?,?,?)", UUID.randomUUID(), street, day.getDayOfWeek().getValue());
-        assertEquals(1, collections.missed(authority, day, day).size());
-        violation("FORBIDDEN", () -> collections.recordPickup(a, street, day, "COMPLETED"));
-        collections.recordPickup(operator, street, day, "COMPLETED");
-        assertTrue(collections.missed(authority, day, day).isEmpty());
-        violation("DUPLICATE_PICKUP", () -> collections.recordPickup(operator, street, day, "FAILED"));
+    void collectionsAreRepeatSafeAndClearMissedStatus() {
+        LocalDate day=LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(1);
+        db.update("insert into operator_wards values (?,?)",operator,ward);
+        db.update("insert into collection_schedules(id,street_id,operator_id,collection_date) values (?,?,?,?)",UUID.randomUUID(),street,operator,day);
+        assertEquals(CollectionStatus.MISSED,collections.listCollectionSchedules(authority,ward,day,day).getFirst().collectionStatus());
+        violation("FORBIDDEN",()->collections.recordCollection(a,street,day));
+        var completed=collections.recordCollection(operator,street,day);
+        assertEquals(completed,collections.recordCollection(operator,street,day));
+        assertEquals(CollectionStatus.DONE,collections.listCollectionSchedules(authority,ward,day,day).getFirst().collectionStatus());
+        assertEquals(1,db.queryForObject("select count(*) from collections",Integer.class));
     }
-
     @Test
     void seedIsRepeatable() {
         var seed = new ResourceDatabasePopulator(new ClassPathResource("db/demo/demo.sql"));
         seed.execute(source);
-        long count = db.queryForObject("select count(*) from confirmations", Long.class);
+        long count = db.queryForObject("select count(*) from report_confirmations", Long.class);
         seed.execute(source);
-        assertEquals(count, db.queryForObject("select count(*) from confirmations", Long.class));
+        assertEquals(count, db.queryForObject("select count(*) from report_confirmations", Long.class));
         assertEquals(3, count);
-        var counts = db.queryForList("select (select count(*) from confirmations c where c.report_id=r.id) n from reports r where note like 'Fictional blocked drain %' order by r.id", Long.class);
+        var counts = db.queryForList("select (select count(*) from report_confirmations c where c.report_id=r.id) n from reports r where note like 'Fictional blocked drain %' order by r.id", Long.class);
         assertEquals(List.of(0L, 1L, 2L), counts);
-        LocalDate yesterday = LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(1);
-        assertFalse(collections.missed(authority, yesterday, yesterday).isEmpty());
+        LocalDate yesterday = db.queryForObject("select cutover_date-1 from collection_migration_cutover", LocalDate.class);
+        assertEquals(CollectionStatus.MISSED, collections.listCollectionSchedules(authority, UUID.fromString("10000000-0000-0000-0000-000000000001"), yesterday, yesterday).getFirst().collectionStatus());
     }
 
     @Test
     void countOnlyIncludesCommittedRows() throws Exception {
-        try (var c = source.getConnection(); var s = c.prepareStatement("insert into confirmations(id,report_id,user_id) values (?,?,?)")) {
+        try (var c = source.getConnection(); var s = c.prepareStatement("insert into report_confirmations(id,report_id,resident_id) values (?,?,?)")) {
             c.setAutoCommit(false);
             s.setObject(1, UUID.randomUUID());
             s.setObject(2, report);
@@ -215,12 +225,15 @@ class PostgresRulesTest {
     }
 
     @Test
-    void failedPickupStillCountsAsMissed() {
-        LocalDate day = LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(1);
-        db.update("insert into operator_wards values (?,?)", operator, ward);
-        db.update("insert into collection_schedules(id,street_id,scheduled_day) values (?,?,?)", UUID.randomUUID(), street, day.getDayOfWeek().getValue());
-        collections.recordPickup(operator, street, day, "FAILED");
-        assertEquals(1, collections.missed(authority, day, day).size());
-        violation("INVALID_DATE_RANGE", () -> collections.missed(authority, day, day.plusDays(400)));
+    void retainedFailedHistoryIsNotACompletion() {
+        LocalDate day=LocalDate.now(ZoneId.of("Africa/Lagos")).minusDays(1);
+        db.update("insert into operator_wards values (?,?)",operator,ward);
+        db.update("insert into collection_schedules(id,street_id,operator_id,collection_date) values (?,?,?,?)",UUID.randomUUID(),street,operator,day);
+        UUID failed=UUID.randomUUID();
+        db.update("insert into legacy_pickups(id,street_id,pickup_date,status,recorded_by) values (?,?,?,'FAILED',?)",failed,street,day,operator);
+        assertEquals(CollectionStatus.MISSED,collections.listCollectionSchedules(authority,ward,day,day).getFirst().collectionStatus());
+        assertEquals("FAILED",db.queryForObject("select status from legacy_pickups where id=?",String.class,failed));
+        assertEquals(0,db.queryForObject("select count(*) from collections",Integer.class));
+        violation("VALIDATION_FAILED",()->collections.listCollectionSchedules(authority,ward,day,day.plusDays(31)));
     }
 }

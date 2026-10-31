@@ -3,6 +3,7 @@ package com.tesa.ekowatch.report.api;
 import com.tesa.ekowatch.shared.Page;
 import java.util.UUID;
 import java.util.List;
+import java.time.Instant;
 
 /** All actorId parameters are private inputs from a trusted principal, never client JSON. */
 public interface ReportApi {
@@ -15,5 +16,5 @@ public interface ReportApi {
     List<ReportView> authorityReports(UUID actorId, int limit, int offset);
 
     /** Internal confirmation collaboration only, not an HTTP operation. */
-    void requireConfirmable(UUID reportId, UUID actorId);
+    ReportView lockForConfirmation(UUID actorId, UUID reportId, Instant transactionStartedAt);
 }

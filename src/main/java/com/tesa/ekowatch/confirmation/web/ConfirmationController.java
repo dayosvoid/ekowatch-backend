@@ -1,6 +1,7 @@
 package com.tesa.ekowatch.confirmation.web;
 
 import com.tesa.ekowatch.confirmation.api.ConfirmationApi;
+import com.tesa.ekowatch.report.api.ReportView;
 import com.tesa.ekowatch.user.api.ActorAccess;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
@@ -24,13 +25,13 @@ public class ConfirmationController {
 
     @PostMapping("/reports/{reportId}/confirm")
     @ResponseStatus(HttpStatus.CREATED)
-    public void confirm(
+    public ReportView confirmReport(
             Authentication authentication,
             @PathVariable UUID reportId) {
 
         UUID actorId = actors.id(authentication);
 
-        confirmations.confirm(
+        return confirmations.confirmReport(
                 actorId,
                 reportId
         );

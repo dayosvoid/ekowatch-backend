@@ -22,7 +22,7 @@ public class ApiExceptionHandler {
         String code = exception.code();
 
         HttpStatus status = switch (code) {
-            case "FORBIDDEN" -> HttpStatus.FORBIDDEN;
+            case "FORBIDDEN", "WARD_ASSIGNMENT_REQUIRED" -> HttpStatus.FORBIDDEN;
 
             case "REPORT_NOT_FOUND", "RESOURCE_NOT_FOUND" ->
                     HttpStatus.NOT_FOUND;
@@ -30,7 +30,7 @@ public class ApiExceptionHandler {
             case "DUPLICATE_CONFIRMATION",
                  "DUPLICATE_PICKUP",
                  "REPORT_NOT_ELIGIBLE",
-                 "SELF_CONFIRMATION" ->
+                 "SELF_CONFIRMATION_NOT_ALLOWED" ->
                     HttpStatus.CONFLICT;
 
             case "VALIDATION_FAILED", "INVALID_REPORT",
@@ -118,7 +118,7 @@ public class ApiExceptionHandler {
 
     private String messageFor(String code) {
         return switch (code) {
-            case "FORBIDDEN" ->
+            case "FORBIDDEN", "WARD_ASSIGNMENT_REQUIRED" ->
                     "You are not authorized to perform this action";
 
             case "REPORT_NOT_FOUND", "RESOURCE_NOT_FOUND" ->
@@ -133,7 +133,7 @@ public class ApiExceptionHandler {
             case "REPORT_NOT_ELIGIBLE" ->
                     "This report cannot be confirmed";
 
-            case "SELF_CONFIRMATION" ->
+            case "SELF_CONFIRMATION_NOT_ALLOWED" ->
                     "You cannot confirm your own report";
 
             case "VALIDATION_FAILED", "INVALID_REPORT" ->

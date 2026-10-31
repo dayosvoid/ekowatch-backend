@@ -75,6 +75,8 @@ class ResidentReportApiTest {
         street=UUID.randomUUID(); secondStreet=UUID.randomUUID(); otherStreet=UUID.randomUUID();
         db.update("insert into streets(id,ward_id,name,latitude,longitude) values (?,?,'Palm Street',6.5,3.4)",street,ward);
         db.update("insert into streets(id,ward_id,name) values (?,?,'No map street'),(?,?,'Other ward street')",secondStreet,ward,otherStreet,otherWard);
+        db.update("insert into operator_wards values (?,?)",operator,ward);
+        db.update("insert into collection_schedules(id,street_id,operator_id,collection_date) values (?,?,?,cast('2026-10-30' as date))",UUID.randomUUID(),street,operator);
     }
     CreateReportRequest request(ReportType type,UUID streetId,String note) {
         return new CreateReportRequest(type,streetId,note,null,null,type==ReportType.MISSED_PICKUP ? LocalDate.of(2026,10,30) : null);
@@ -87,7 +89,7 @@ class ResidentReportApiTest {
         assertEquals(code,assertThrows(RuleViolation.class,action).code());
     }
     void evidence(UUID reportId,UUID actorId,Instant at) {
-        db.update("insert into confirmations(id,report_id,user_id,created_at) values (?,?,?,?)",UUID.randomUUID(),reportId,actorId,Timestamp.from(at));
+        db.update("insert into report_confirmations(id,report_id,resident_id,confirmed_at) values (?,?,?,?)",UUID.randomUUID(),reportId,actorId,Timestamp.from(at));
     }
     UUID photo(UUID owner) {
         UUID id=UUID.randomUUID();
@@ -225,7 +227,7 @@ class ResidentReportApiTest {
         assertEquals(NOW.minusSeconds(3600),read.lastEvidenceAt()); assertEquals(NOW.plusSeconds(5*3600),read.expiresAt());
         assertEquals(FloodStatus.CURRENT,read.floodStatus());
         var storedBefore=db.queryForMap("select * from reports where id=?",flood.reportId());
-        var confirmationsBefore=db.queryForList("select * from confirmations where report_id=? order by id",flood.reportId());
+        var confirmationsBefore=db.queryForList("select * from report_confirmations where report_id=? order by id",flood.reportId());
         clock.set(read.expiresAt().minusNanos(1));
         assertEquals(FloodStatus.CURRENT,reports.getReport(other,flood.reportId()).floodStatus());
         assertEquals(1,list(null,ReportType.FLOODED_ROAD,FloodStatus.CURRENT,0,20,null).totalElements());
@@ -235,7 +237,7 @@ class ResidentReportApiTest {
         clock.set(read.expiresAt().plusSeconds(3600));
         assertEquals(FloodStatus.EXPIRED,reports.getReport(other,flood.reportId()).floodStatus());
         assertEquals(storedBefore,db.queryForMap("select * from reports where id=?",flood.reportId()));
-        assertEquals(confirmationsBefore,db.queryForList("select * from confirmations where report_id=? order by id",flood.reportId()));
+        assertEquals(confirmationsBefore,db.queryForList("select * from report_confirmations where report_id=? order by id",flood.reportId()));
     }
 
     @Test void wardFiltersCountsPaginationAndOrderingAreDeterministic() {

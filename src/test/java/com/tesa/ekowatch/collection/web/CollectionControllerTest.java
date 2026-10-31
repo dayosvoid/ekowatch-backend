@@ -26,26 +26,24 @@ class CollectionControllerTest {
             UUID.fromString("20000000-0000-0000-0000-000000000001");
 
     @Test
-    void operatorCanRecordPickup() {
+    void operatorCanRecordCollection() {
 
         when(actors.id(authentication)).thenReturn(ACTOR_ID);
 
-        CollectionController.PickupRequest request =
-                new CollectionController.PickupRequest(
+        CollectionController.CollectionRequest request =
+                new CollectionController.CollectionRequest(
                         STREET_ID,
-                        LocalDate.of(2026, 10, 25),
-                        "COMPLETED"
+                        LocalDate.of(2026, 10, 25)
                 );
 
-        controller.recordPickup(authentication, request);
+        controller.recordCollection(authentication, request);
 
         verify(actors).id(authentication);
 
-        verify(collections).recordPickup(
+        verify(collections).recordCollection(
                 ACTOR_ID,
                 STREET_ID,
-                LocalDate.of(2026, 10, 25),
-                "COMPLETED"
+                LocalDate.of(2026, 10, 25)
         );
     }
 }
