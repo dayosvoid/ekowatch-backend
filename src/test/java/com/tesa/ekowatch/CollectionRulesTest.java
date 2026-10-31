@@ -60,7 +60,7 @@ class CollectionRulesTest {
         assertEquals(CollectionStatus.SCHEDULED,views(yesterday,yesterday).getFirst().collectionStatus());
         clock.set(Instant.parse("2026-10-30T23:00:00Z"));
         assertEquals(CollectionStatus.MISSED,views(yesterday,yesterday).getFirst().collectionStatus());
-        reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,yesterday));
+        reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,yesterday));
         assertEquals(1,views(yesterday,yesterday).getFirst().missedReportCount());
         clock.set(Instant.parse("2026-10-30T22:59:59Z"));
         assertEquals(CollectionStatus.SCHEDULED,views(yesterday,yesterday).getFirst().collectionStatus());
@@ -131,9 +131,9 @@ class CollectionRulesTest {
     }
 
     @Test void missedReportsRequireExactElapsedOccurrenceAtServiceAndDatabaseBoundaries() {
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,today)));
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,yesterday.minusDays(1))));
-        violation("VALIDATION_FAILED",()->reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,otherStreet,"Missed",null,null,yesterday)));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,today)));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,yesterday.minusDays(1))));
+        violation("VALIDATION_FAILED",()->reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,otherStreet,"Missed",null,null,yesterday)));
         assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->db.update(
             "insert into reports(id,reporter_id,ward_id,street_id,report_type,note,collection_date) values (?,?,?,?,'MISSED_PICKUP','Missed',?)",
             UUID.randomUUID(),resident,ward,street,yesterday.minusDays(1)));
@@ -142,7 +142,7 @@ class CollectionRulesTest {
         assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->db.update(
             "insert into reports(id,reporter_id,ward_id,street_id,report_type,note,collection_date) values (?,?,?,?,'MISSED_PICKUP','Missed',?)",
             UUID.randomUUID(),resident,ward,street,databaseToday));
-        assertNotNull(reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,yesterday)).reportId());
+        assertNotNull(reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed",null,null,yesterday)).reportId());
     }
     @Autowired com.tesa.ekowatch.authority.api.AuthorityApi authorities;
     @Autowired javax.sql.DataSource source;
@@ -152,12 +152,12 @@ class CollectionRulesTest {
     @Test void metricsUseExactDatesAndHistoricalOperatorWithIndependentHazardSnapshot() {
         schedule(street,otherOperator,yesterday.minusDays(1));
         collections.recordCollection(operator,street,yesterday);
-        reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed twice",null,null,yesterday));
-        reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Another witness",null,null,yesterday));
+        reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Missed twice",null,null,yesterday));
+        reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Another witness",null,null,yesterday));
         assertEquals(CollectionStatus.MISSED,views(yesterday.minusDays(1),yesterday.minusDays(1)).getFirst().collectionStatus());
-        reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain one",null,null,null));
-        reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain two",null,null,null));
-        var flood=reports.createReport(resident,new CreateReportRequest(ReportType.FLOODED_ROAD,street,"Flood",null,null,null));
+        reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain one",null,null,null));
+        reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain two",null,null,null));
+        var flood=reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.FLOODED_ROAD,street,"Flood",null,null,null));
         db.update("delete from operator_wards where operator_id=?",operator);
         var d=authorities.getWardDashboard(authority,ward,yesterday.minusDays(1),today.plusDays(1));
         assertEquals(1,d.missedPickupCount()); assertEquals(1,d.disputedPickupCount());
@@ -192,7 +192,7 @@ class CollectionRulesTest {
         violation("RESOURCE_NOT_FOUND",()->authorities.getWardDashboard(authority,UUID.randomUUID(),today,today));
         violation("VALIDATION_FAILED",()->reports.listWardHazards(resident,null));
         violation("RESOURCE_NOT_FOUND",()->reports.listWardHazards(resident,UUID.randomUUID()));
-        for(int i=0;i<105;i++) reports.createReport(resident,new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",null,new com.tesa.ekowatch.shared.Location(6.0,3.0),null));
+        for(int i=0;i<105;i++) reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.BLOCKED_DRAIN,street,"Drain",null,new com.tesa.ekowatch.shared.Location(6.0,3.0),null));
         var hazards=reports.listWardHazards(resident,ward);
         assertEquals(105,hazards.items().size()); assertEquals(105,dashboard().blockedDrainCount());
         assertEquals(hazards,reports.listWardHazards(resident,ward));
@@ -223,7 +223,7 @@ class CollectionRulesTest {
                 }
                 try(var pool=Executors.newSingleThreadExecutor()) {
                     var concurrent=pool.submit(()-> {
-                        if(completionFirst) reports.createReport(resident,new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Concurrent witness",null,null,date));
+                        if(completionFirst) reports.createReport(resident,UUID.randomUUID(),new CreateReportRequest(ReportType.MISSED_PICKUP,street,"Concurrent witness",null,null,date));
                         else collections.recordCollection(operator,street,date);
                     });
                     concurrent.get(30,TimeUnit.SECONDS);
