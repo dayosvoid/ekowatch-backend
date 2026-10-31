@@ -68,7 +68,7 @@ class PostgresRulesTest {
         street = UUID.randomUUID();
         db.update("insert into wards(id,name) values (?,?)", ward, "Ward " + ward);
         db.update("insert into streets(id,ward_id,name) values (?,?,?)", street, ward, "Test street");
-        report = reports.createReport(reporter, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "Blocked drain", null, null, null)).reportId();
+        report = reports.createReport(reporter,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "Blocked drain", null, null, null)).reportId();
     }
 
     List<String> race(UUID first, UUID second) throws Exception {
@@ -114,35 +114,6 @@ class PostgresRulesTest {
         }
     }
 
-    @Test
-    void isolatedConstraintEvidence() throws Exception {
-        // DDL is confined to a temporary table in this disposable Testcontainers database.
-        try (var c = source.getConnection(); var s = c.createStatement()) {
-            s.execute("create temporary table constraint_evidence (like report_confirmations including all)");
-            // Renamed source indexes need not produce a predictable cloned constraint name.
-            String uniqueName;
-            try (var constraints = s.executeQuery("select conname,pg_get_constraintdef(oid) from pg_constraint where conrelid='pg_temp.constraint_evidence'::regclass and contype='u'")) {
-                assertTrue(constraints.next());
-                uniqueName = constraints.getString(1);
-                assertEquals("UNIQUE (report_id, resident_id)", constraints.getString(2));
-                assertFalse(constraints.next());
-            }
-            s.execute("alter table pg_temp.constraint_evidence drop constraint \"" + uniqueName.replace("\"", "\"\"") + "\"");
-            String values = "'" + report + "','" + a + "'";
-            s.executeUpdate("insert into constraint_evidence(id,report_id,resident_id) values ('" + UUID.randomUUID() + "'," + values + "),('" + UUID.randomUUID() + "'," + values + ")");
-            try (var r = s.executeQuery("select count(*) from constraint_evidence")) {
-                r.next();
-                assertEquals(2, r.getInt(1));
-            }
-            s.execute("truncate constraint_evidence");
-            s.execute("alter table constraint_evidence add constraint evidence_unique unique(report_id,resident_id)");
-            s.executeUpdate("insert into constraint_evidence(id,report_id,resident_id) values ('" + UUID.randomUUID() + "'," + values + ")");
-            var e = assertThrows(java.sql.SQLException.class, () -> s.executeUpdate("insert into constraint_evidence(id,report_id,resident_id) values ('" + UUID.randomUUID() + "'," + values + ")"));
-            assertEquals("23505", e.getSQLState());
-            System.out.println("Restored constraint SQLSTATE=" + e.getSQLState());
-        }
-    }
-
     void violation(String code, org.junit.jupiter.api.function.Executable action) {
         assertEquals(code, assertThrows(RuleViolation.class, action).code());
     }
@@ -159,27 +130,27 @@ class PostgresRulesTest {
         assertEquals(historyBefore, db.queryForMap("select status,updated_at from reports where id=?", report));
         violation("FORBIDDEN", () -> authorities.getWardDashboard(a, ward, LocalDate.now(), LocalDate.now()));
         assertEquals(1, authorities.getWardDashboard(authority, ward, LocalDate.now(), LocalDate.now()).blockedDrainCount());
-        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, " ", null, null, null)));
-        violation("RESOURCE_NOT_FOUND", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, UUID.randomUUID(), "Drain", null, null, null)));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, " ", null, null, null)));
+        violation("RESOURCE_NOT_FOUND", () -> reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, UUID.randomUUID(), "Drain", null, null, null)));
     }
 
     @Test
     void reportNotesAreTrimmedAndLimitedThroughCanonicalRequest() {
-        var view = reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "  " + "x".repeat(1000) + "  ", null, null, null));
+        var view = reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "  " + "x".repeat(1000) + "  ", null, null, null));
         assertEquals("x".repeat(1000), view.note());
         assertEquals("x".repeat(1000), db.queryForObject("select note from reports where id=?", String.class, view.reportId()));
-        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "x".repeat(1001), null, null, null)));
-        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, null, null, null, null)));
-        violation("VALIDATION_FAILED", () -> reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "\t\n ", null, null, null)));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "x".repeat(1001), null, null, null)));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, null, null, null, null)));
+        violation("VALIDATION_FAILED", () -> reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "\t\n ", null, null, null)));
         String unicodeNote = "\uD83C\uDF0D".repeat(1000);
-        assertEquals(unicodeNote, reports.createReport(a, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, unicodeNote, null, null, null)).note());
+        assertEquals(unicodeNote, reports.createReport(a,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, unicodeNote, null, null, null)).note());
     }
 
     @Test
     void missingPhotoUrlAdapterNeverExposesStorageKey() {
         UUID photoId = UUID.randomUUID();
         db.update("insert into photos(id,owner_id,storage_key,content_type,size_bytes) values (?,?,'private-test-key','image/jpeg',100)", photoId, reporter);
-        var view = reports.createReport(reporter, new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "Drain", photoId, null, null));
+        var view = reports.createReport(reporter,UUID.randomUUID(), new CreateReportRequest(ReportType.BLOCKED_DRAIN, street, "Drain", photoId, null, null));
         assertNull(view.photoUrl());
         assertNull(reports.getReport(a, view.reportId()).photoUrl());
         assertEquals(photoId, db.queryForObject("select photo_id from reports where id=?", UUID.class, view.reportId()));
@@ -204,10 +175,10 @@ class PostgresRulesTest {
         long count = db.queryForObject("select count(*) from report_confirmations", Long.class);
         seed.execute(source);
         assertEquals(count, db.queryForObject("select count(*) from report_confirmations", Long.class));
-        assertEquals(3, count);
+        assertEquals(5, count);
         var counts = db.queryForList("select (select count(*) from report_confirmations c where c.report_id=r.id) n from reports r where note like 'Fictional blocked drain %' order by r.id", Long.class);
         assertEquals(List.of(0L, 1L, 2L), counts);
-        LocalDate yesterday = db.queryForObject("select cutover_date-1 from collection_migration_cutover", LocalDate.class);
+        LocalDate yesterday = LocalDate.of(2026,10,30);
         assertEquals(CollectionStatus.MISSED, collections.listCollectionSchedules(authority, UUID.fromString("10000000-0000-0000-0000-000000000001"), yesterday, yesterday).getFirst().collectionStatus());
     }
 

@@ -67,25 +67,27 @@ public class CollectionService implements CollectionApi {
 
     @Transactional(isolation=Isolation.READ_COMMITTED)
     public CollectionView recordCollection(UUID actorId,UUID streetId,LocalDate collectionDate) {
-        actors.requireRole(actorId,"OPERATOR");
-        Instant now=clock.instant().truncatedTo(ChronoUnit.MICROS);
-        if(streetId==null || collectionDate==null || collectionDate.isAfter(LocalDate.ofInstant(now,LAGOS)))
-            throw new RuleViolation("VALIDATION_FAILED");
-        var wards=db.query("select ward_id from streets where id=?",(r,n)->r.getObject(1,UUID.class),streetId);
-        if(wards.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
-        if(!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from operator_wards where operator_id=? and ward_id=?)",
-                Boolean.class,actorId,wards.getFirst()))) throw new RuleViolation("WARD_ASSIGNMENT_REQUIRED");
-        var scheduled=db.query("select operator_id from collection_schedules where street_id=? and collection_date=?",
-                (r,n)->r.getObject(1,UUID.class),streetId,collectionDate);
-        if(scheduled.isEmpty()) throw new RuleViolation("VALIDATION_FAILED");
-        if(!actorId.equals(scheduled.getFirst())) throw new RuleViolation("FORBIDDEN");
-        db.update("""
-            insert into collections(id,street_id,collection_date,completed_by,completed_at) values (?,?,?,?,?)
-            on conflict on constraint uq_collection_street_date do nothing
-            """,UUID.randomUUID(),streetId,collectionDate,actorId,Timestamp.from(now));
-        return db.queryForObject("select c.*, exists(select 1 from reports r where r.street_id=c.street_id and r.collection_date=c.collection_date and r.report_type='MISSED_PICKUP') disputed from collections c where street_id=? and collection_date=?",
-            (r,n)->new CollectionView(r.getObject("id",UUID.class),r.getObject("street_id",UUID.class),
-                r.getObject("collection_date",LocalDate.class),r.getTimestamp("completed_at").toInstant(),r.getBoolean("disputed") ? CollectionStatus.DISPUTED : CollectionStatus.DONE),
-            streetId,collectionDate);
+        return com.tesa.ekowatch.shared.OperationLog.record("recordCollection", () -> {
+            actors.requireRole(actorId,"OPERATOR");
+            Instant now=clock.instant().truncatedTo(ChronoUnit.MICROS);
+            if(streetId==null || collectionDate==null || collectionDate.isAfter(LocalDate.ofInstant(now,LAGOS)))
+                throw new RuleViolation("VALIDATION_FAILED");
+            var wards=db.query("select ward_id from streets where id=?",(r,n)->r.getObject(1,UUID.class),streetId);
+            if(wards.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
+            if(!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from operator_wards where operator_id=? and ward_id=?)",
+                    Boolean.class,actorId,wards.getFirst()))) throw new RuleViolation("WARD_ASSIGNMENT_REQUIRED");
+            var scheduled=db.query("select operator_id from collection_schedules where street_id=? and collection_date=?",
+                    (r,n)->r.getObject(1,UUID.class),streetId,collectionDate);
+            if(scheduled.isEmpty()) throw new RuleViolation("VALIDATION_FAILED");
+            if(!actorId.equals(scheduled.getFirst())) throw new RuleViolation("FORBIDDEN");
+            db.update("""
+                insert into collections(id,street_id,collection_date,completed_by,completed_at) values (?,?,?,?,?)
+                on conflict on constraint uq_collection_street_date do nothing
+                """,UUID.randomUUID(),streetId,collectionDate,actorId,Timestamp.from(now));
+            return db.queryForObject("select c.*, exists(select 1 from reports r where r.street_id=c.street_id and r.collection_date=c.collection_date and r.report_type='MISSED_PICKUP') disputed from collections c where street_id=? and collection_date=?",
+                (r,n)->new CollectionView(r.getObject("id",UUID.class),r.getObject("street_id",UUID.class),
+                    r.getObject("collection_date",LocalDate.class),r.getTimestamp("completed_at").toInstant(),r.getBoolean("disputed") ? CollectionStatus.DISPUTED : CollectionStatus.DONE),
+                streetId,collectionDate);
+        });
     }
 }

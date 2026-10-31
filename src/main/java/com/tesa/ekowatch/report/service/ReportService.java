@@ -11,6 +11,14 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Value;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -20,6 +28,8 @@ import java.util.*;
 @Service
 @Transactional
 public class ReportService implements ReportApi {
+    private static final String CREATE_REPORT = "createReport";
+    private final ObjectMapper json;
     private final JdbcTemplate db;
     private final ActorAccess actors;
     private final PhotoApi photos;
@@ -27,9 +37,9 @@ public class ReportService implements ReportApi {
     private final CollectionApi collections;
     private final Duration floodFreshness;
 
-    public ReportService(JdbcTemplate db, ActorAccess actors, PhotoApi photos, Clock clock, CollectionApi collections,
+    public ReportService(JdbcTemplate db, ActorAccess actors, PhotoApi photos, Clock clock, CollectionApi collections, ObjectMapper json,
                          @Value("${ekowatch.flood-freshness-hours:6}") long floodFreshnessHours) {
-        this.db = db; this.actors = actors; this.photos = photos; this.clock = clock; this.collections = collections;
+        this.db = db; this.actors = actors; this.photos = photos; this.clock = clock; this.collections = collections; this.json = json;
         if (floodFreshnessHours <= 0) throw new IllegalArgumentException("ekowatch.flood-freshness-hours must be positive");
         this.floodFreshness = Duration.ofHours(floodFreshnessHours);
     }
@@ -67,43 +77,108 @@ public class ReportService implements ReportApi {
                 floodStatus, expiresAt, mapLocation, "STREET");
     }
 
-    public ReportView createReport(UUID actorId, CreateReportRequest request) {
-        actors.requireRole(actorId, "RESIDENT");
-        if (request == null || request.reportType() == null || request.streetId() == null || request.note() == null)
-            throw new RuleViolation("VALIDATION_FAILED");
-        String note = request.note().trim();
-        if (note.isBlank() || note.codePointCount(0, note.length()) > 1000)
-            throw new RuleViolation("VALIDATION_FAILED");
-        Location location = request.location();
-        if (location != null && (location.latitude() == null || location.longitude() == null ||
-                !Double.isFinite(location.latitude()) || !Double.isFinite(location.longitude()) ||
-                location.latitude() < -90 || location.latitude() > 90 ||
-                location.longitude() < -180 || location.longitude() > 180)) throw new RuleViolation("VALIDATION_FAILED");
-        if ((request.reportType() == ReportType.MISSED_PICKUP) != (request.collectionDate() != null))
-            throw new RuleViolation("VALIDATION_FAILED");
-        var wards = db.query("select ward_id from streets where id=?", (r,n) -> r.getObject(1,UUID.class), request.streetId());
-        if (wards.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
-        if (request.reportType() == ReportType.MISSED_PICKUP) {
-            LocalDate today = LocalDate.ofInstant(clock.instant(), ZoneId.of("Africa/Lagos"));
-            if (!request.collectionDate().isBefore(today) || collections.listCollectionSchedules(actorId, wards.getFirst(),
-                    request.collectionDate(), request.collectionDate()).stream().noneMatch(s -> s.streetId().equals(request.streetId())))
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ReportView createReport(UUID actorId, UUID idempotencyKey, CreateReportRequest request) {
+        return com.tesa.ekowatch.shared.OperationLog.record("createReport", () -> {
+            actors.requireRole(actorId, "RESIDENT");
+            if (idempotencyKey == null) throw new RuleViolation("IDEMPOTENCY_KEY_REQUIRED");
+            if (request == null || request.reportType() == null || request.streetId() == null || request.note() == null)
                 throw new RuleViolation("VALIDATION_FAILED");
+            String note = request.note().trim();
+            if (note.isBlank() || note.codePointCount(0, note.length()) > 1000)
+                throw new RuleViolation("VALIDATION_FAILED");
+            Location location = request.location();
+            if (location != null && (location.latitude() == null || location.longitude() == null ||
+                    !Double.isFinite(location.latitude()) || !Double.isFinite(location.longitude()) ||
+                    location.latitude() < -90 || location.latitude() > 90 ||
+                    location.longitude() < -180 || location.longitude() > 180)) throw new RuleViolation("VALIDATION_FAILED");
+            if ((request.reportType() == ReportType.MISSED_PICKUP) != (request.collectionDate() != null))
+                throw new RuleViolation("VALIDATION_FAILED");
+            String hash = requestHash(request,note);
+            // Hash collisions only serialize unrelated intents; identity is always checked by the unique tuple.
+            db.queryForObject("select pg_advisory_xact_lock(hashtextextended(?,0))", (r,n)->0,
+                    actorId + ":" + CREATE_REPORT + ":" + idempotencyKey);
+            // Sample after waiting: an intent that expires during the wait is no longer replay protected.
+            Instant now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            var previous = db.query("""
+                    select request_hash,response_payload::text,expires_at from idempotency_records
+                    where user_id=? and operation=? and idempotency_key=? for update
+                    """, (r,n)->new StoredResponse(r.getString(1),r.getString(2),r.getTimestamp(3).toInstant()),
+                    actorId,CREATE_REPORT,idempotencyKey);
+            if (!previous.isEmpty() && now.isBefore(previous.getFirst().expiresAt())) {
+                if (!hash.equals(previous.getFirst().requestHash())) throw new RuleViolation("IDEMPOTENCY_KEY_REUSED");
+                return readResponse(previous.getFirst().payload());
+            }
+            var wards = db.query("select ward_id from streets where id=?", (r,n) -> r.getObject(1,UUID.class), request.streetId());
+            if (wards.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
+            if (request.reportType() == ReportType.MISSED_PICKUP) {
+                LocalDate today = LocalDate.ofInstant(now, ZoneId.of("Africa/Lagos"));
+                if (!request.collectionDate().isBefore(today) || collections.listCollectionSchedules(actorId, wards.getFirst(),
+                        request.collectionDate(), request.collectionDate()).stream().noneMatch(s -> s.streetId().equals(request.streetId())))
+                    throw new RuleViolation("VALIDATION_FAILED");
+            }
+            if (request.photoId() != null) {
+                var owners = db.query("select owner_id from photos where id=?", (r,n) -> r.getObject(1,UUID.class), request.photoId());
+                if (owners.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
+                if (!actorId.equals(owners.getFirst())) throw new RuleViolation("FORBIDDEN");
+            }
+            UUID id = UUID.randomUUID();
+            db.update("""
+                    insert into reports(id,reporter_id,ward_id,street_id,report_type,note,photo_id,
+                                        latitude,longitude,collection_date,created_at,updated_at)
+                    values (?,?,?,?,?,?,?,?,?,?,?,?)
+                    """, id, actorId, wards.getFirst(), request.streetId(), request.reportType().name(), note, request.photoId(),
+                    location == null ? null : location.latitude(), location == null ? null : location.longitude(),
+                    request.collectionDate(), Timestamp.from(now), Timestamp.from(now));
+            ReportView response = find(actorId, id, now);
+            int saved = db.update("""
+                    insert into idempotency_records(id,user_id,operation,idempotency_key,request_hash,
+                        report_id,response_payload,created_at,expires_at)
+                    values (?,?,?,?,?,?,cast(? as jsonb),?,?)
+                    on conflict on constraint uq_idempotency_user_operation_key do update set
+                        request_hash=excluded.request_hash,report_id=excluded.report_id,
+                        response_payload=excluded.response_payload,created_at=excluded.created_at,expires_at=excluded.expires_at
+                    where idempotency_records.expires_at <= excluded.created_at
+                    """,UUID.randomUUID(),actorId,CREATE_REPORT,idempotencyKey,hash,id,writeResponse(response),
+                    Timestamp.from(now),Timestamp.from(now.plus(Duration.ofHours(24))));
+            // Never continue after a failed SQL statement. A protected conflicting intent rolls back this report too.
+            if (saved != 1) throw new RuleViolation("IDEMPOTENCY_KEY_REUSED");
+            return response;
+        });
+    }
+
+    private record StoredResponse(String requestHash, String payload, Instant expiresAt) {}
+
+    private String requestHash(CreateReportRequest request, String note) {
+        Location location=request.location();
+        // Fixed, versioned positional encoding. Nulls, UUIDs, dates and finite doubles have explicit forms.
+        // Normalize signed zero, which PostgreSQL stores as the same numeric coordinate.
+        var canonical=Arrays.asList("createReport:v1",request.reportType().name(),request.streetId().toString(),note,
+                request.photoId()==null ? null : request.photoId().toString(),
+                location==null ? null : Double.toString(location.latitude()==0.0 ? 0.0 : location.latitude()),
+                location==null ? null : Double.toString(location.longitude()==0.0 ? 0.0 : location.longitude()),
+                request.collectionDate()==null ? null : request.collectionDate().toString());
+        try (var buffer=new ByteArrayOutputStream(); var encoded=new DataOutputStream(buffer)) {
+            for (String value:canonical) {
+                if (value==null) encoded.writeInt(-1);
+                else {
+                    byte[] bytes=value.getBytes(StandardCharsets.UTF_8);
+                    encoded.writeInt(bytes.length); encoded.write(bytes);
+                }
+            }
+            encoded.flush();
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(buffer.toByteArray()));
+        } catch (IOException | NoSuchAlgorithmException e) {
+            throw new IllegalStateException("Cannot hash report request",e);
         }
-        if (request.photoId() != null) {
-            var owners = db.query("select owner_id from photos where id=?", (r,n) -> r.getObject(1,UUID.class), request.photoId());
-            if (owners.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
-            if (!actorId.equals(owners.getFirst())) throw new RuleViolation("FORBIDDEN");
-        }
-        UUID id = UUID.randomUUID();
-        Instant now = clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-        db.update("""
-                insert into reports(id,reporter_id,ward_id,street_id,report_type,note,photo_id,
-                                    latitude,longitude,collection_date,created_at,updated_at)
-                values (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, id, actorId, wards.getFirst(), request.streetId(), request.reportType().name(), note, request.photoId(),
-                location == null ? null : location.latitude(), location == null ? null : location.longitude(),
-                request.collectionDate(), Timestamp.from(now), Timestamp.from(now));
-        return find(actorId, id, now);
+    }
+    private String writeResponse(ReportView response) {
+        try { return json.writeValueAsString(response); }
+        catch (JsonProcessingException e) { throw new IllegalStateException("Cannot persist report response",e); }
+    }
+    private ReportView readResponse(String payload) {
+        try { return json.readValue(payload,ReportView.class); }
+        catch (JsonProcessingException e) { throw new IllegalStateException("Cannot read report response",e); }
     }
 
     private ReportView find(UUID actorId, UUID reportId, Instant now) {

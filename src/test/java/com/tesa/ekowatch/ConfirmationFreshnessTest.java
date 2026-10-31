@@ -73,7 +73,7 @@ class ConfirmationFreshnessTest {
         db.update("insert into streets(id,ward_id,name) values (?,?,'Fictional street')",street,ward);
     }
     ReportView create(ReportType type) {
-        return reports.createReport(reporter,new CreateReportRequest(type,street,"Fictional evidence",null,null,
+        return reports.createReport(reporter,UUID.randomUUID(),new CreateReportRequest(type,street,"Fictional evidence",null,null,
                 type==ReportType.MISSED_PICKUP ? LocalDate.of(2026,10,30) : null));
     }
     Map<String,Object> row(UUID report,UUID actor) {
@@ -237,7 +237,7 @@ class ConfirmationFreshnessTest {
     @Test void responseFailureRollsBackEvidenceBeforeReturningToCaller() {
         UUID photo=UUID.randomUUID();
         db.update("insert into photos(id,owner_id,storage_key,content_type,size_bytes) values (?,?,'synthetic-test-reference','image/jpeg',10)",photo,reporter);
-        var report=reports.createReport(reporter,new CreateReportRequest(ReportType.FLOODED_ROAD,street,"Fictional",photo,null,null));
+        var report=reports.createReport(reporter,UUID.randomUUID(),new CreateReportRequest(ReportType.FLOODED_ROAD,street,"Fictional",photo,null,null));
         urls.reset(2); // Lock snapshot resolves once; response projection after insertion resolves a second time.
         assertThrows(IllegalStateException.class,()->confirmations.confirmReport(a,report.reportId()));
         assertEquals(0,db.queryForObject("select count(*) from report_confirmations where report_id=?",Integer.class,report.reportId()));

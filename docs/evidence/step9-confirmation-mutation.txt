@@ -1,0 +1,11 @@
+Command: mvn -B '-Dtest=InvariantEvidenceTest#oneResidentCountsOnceInTheRealCanonicalTable' '-Dekowatch.evidence.mutation=confirmation' test
+Maven exit code: 1 (expected negative mutation)
+Actual excerpts; fixture and schema exist only in the test-owned disposable PostgreSQL container.
+EVIDENCE invariant=oneResidentCountsOnce mutation=confirmation actualRows=2
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 75.11 s <<< FAILURE! -- in com.tesa.ekowatch.InvariantEvidenceTest
+org.opentest4j.AssertionFailedError: One resident must contribute exactly one persisted confirmation, even under concurrent writes ==> expected: <1> but was: <2>
+[ERROR]   InvariantEvidenceTest.oneResidentCountsOnceInTheRealCanonicalTable:86 One resident must contribute exactly one persisted confirmation, even under concurrent writes ==> expected: <1> but was: <2>
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+[INFO] BUILD FAILURE
+[INFO] Total time:  01:44 min
+[INFO] Finished at: 2026-10-31T20:04:52+01:00

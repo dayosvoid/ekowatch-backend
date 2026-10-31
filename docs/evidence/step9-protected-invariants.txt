@@ -1,0 +1,10 @@
+Command: mvn -B verify
+Maven exit code: 0
+Actual protected-run excerpts; mutation defaults to none and all production protections are present.
+EVIDENCE invariant=authorityRole mutation=none outcome=FORBIDDEN
+EVIDENCE invariant=oneResidentCountsOnce mutation=none actualRows=1
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 31.34 s -- in com.tesa.ekowatch.InvariantEvidenceTest
+[INFO] Tests run: 95, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Total time:  07:34 min
+[INFO] Finished at: 2026-10-31T20:14:20+01:00

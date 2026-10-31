@@ -46,22 +46,30 @@ class ReportControllerTest {
         when(actors.id(authentication)).thenReturn(ACTOR_ID);
         var request = request(NOTE);
         var expected = view();
-        when(reports.createReport(ACTOR_ID, request)).thenReturn(expected);
+        when(reports.createReport(ACTOR_ID, null, request)).thenReturn(expected);
         assertSame(expected, controller.create(authentication, request));
         verify(actors).id(authentication);
-        verify(reports).createReport(ACTOR_ID, request);
+        verify(reports).createReport(ACTOR_ID, null, request);
     }
 
     @Test
     void rejectsReportWithBlankNote() {
         when(actors.id(authentication)).thenReturn(ACTOR_ID);
         var request = request("");
-        when(reports.createReport(ACTOR_ID, request)).thenThrow(new RuleViolation("VALIDATION_FAILED"));
+        when(reports.createReport(ACTOR_ID, null, request)).thenThrow(new RuleViolation("VALIDATION_FAILED"));
         assertEquals("VALIDATION_FAILED", assertThrows(RuleViolation.class, () -> controller.create(authentication, request)).code());
         verify(actors).id(authentication);
-        verify(reports).createReport(ACTOR_ID, request);
+        verify(reports).createReport(ACTOR_ID, null, request);
     }
 
+    @Test
+    void unintegratedCreateAdapterPropagatesRequiredKeyWithoutInventingOne() {
+        when(actors.id(authentication)).thenReturn(ACTOR_ID);
+        var request=request(NOTE);
+        when(reports.createReport(ACTOR_ID, null, request)).thenThrow(new RuleViolation("IDEMPOTENCY_KEY_REQUIRED"));
+        assertEquals("IDEMPOTENCY_KEY_REQUIRED",assertThrows(RuleViolation.class,()->controller.create(authentication,request)).code());
+        verify(reports).createReport(ACTOR_ID, null, request);
+    }
     @Test
     void getUsesPrincipalAndCanonicalService() {
         when(actors.id(authentication)).thenReturn(ACTOR_ID);
@@ -84,7 +92,7 @@ class ReportControllerTest {
     @Test
     void httpUsesNoteAndDoesNotAcceptActorFromJson() throws Exception {
         when(actors.id(authentication)).thenReturn(ACTOR_ID);
-        when(reports.createReport(ACTOR_ID, request(NOTE))).thenReturn(view());
+        when(reports.createReport(ACTOR_ID, null, request(NOTE))).thenReturn(view());
         mvc().perform(post("/api/reports").principal(authentication).contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {"reportType":"BLOCKED_DRAIN","streetId":"%s","note":"%s","actorId":"%s"}
@@ -93,13 +101,13 @@ class ReportControllerTest {
                 .andExpect(jsonPath("$.reportId").value(REPORT_ID.toString()))
                 .andExpect(jsonPath("$.description").doesNotExist()).andExpect(jsonPath("$.reporterId").doesNotExist())
                 .andExpect(jsonPath("$.status").doesNotExist());
-        verify(reports).createReport(ACTOR_ID, request(NOTE));
+        verify(reports).createReport(ACTOR_ID, null, request(NOTE));
     }
 
     @Test
     void httpMapsCanonicalValidationAndNotFoundCodes() throws Exception {
         when(actors.id(authentication)).thenReturn(ACTOR_ID);
-        when(reports.createReport(ACTOR_ID, request(""))).thenThrow(new RuleViolation("VALIDATION_FAILED"));
+        when(reports.createReport(ACTOR_ID, null, request(""))).thenThrow(new RuleViolation("VALIDATION_FAILED"));
         mvc().perform(post("/api/reports").principal(authentication).contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {"reportType":"BLOCKED_DRAIN","streetId":"%s","note":""}
