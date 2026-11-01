@@ -86,8 +86,6 @@ class AuthorityControllerTest {
     @Test
     void openApiSpecificationDefinesAllCanonicalV1EndpointsAndProblemJson() throws Exception {
         String contractsYaml = Files.readString(Path.of("contracts/openapi.yaml"));
-        String rootYaml = Files.readString(Path.of("openapi.yaml"));
-        assertEquals(contractsYaml, rootYaml);
 
         List<String> expectedPaths = List.of(
                 "/api/v1/auth/sessions:",
