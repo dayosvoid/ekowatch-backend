@@ -1,0 +1,10 @@
+Command: mvn -B '-Dtest=InvariantEvidenceTest#performanceQueriesRefuseResidentRole' '-Dekowatch.evidence.mutation=authority' test
+Maven exit code: 1 (expected negative mutation)
+Actual excerpts; test-only ActorAccess removes only AUTHORITY enforcement; the actual AuthorityService executes against its disposable PostgreSQL fixture. Production source is unchanged by this mutation.
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 43.21 s <<< FAILURE! -- in com.tesa.ekowatch.InvariantEvidenceTest
+org.opentest4j.AssertionFailedError: Resident must not receive authority performance data ==> Expected com.tesa.ekowatch.shared.RuleViolation to be thrown, but nothing was thrown.
+[ERROR]   InvariantEvidenceTest.performanceQueriesRefuseResidentRole:92 Resident must not receive authority performance data ==> Expected com.tesa.ekowatch.shared.RuleViolation to be thrown, but nothing was thrown.
+[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0
+[INFO] BUILD FAILURE
+[INFO] Total time:  56.123 s
+[INFO] Finished at: 2026-10-31T20:06:07+01:00

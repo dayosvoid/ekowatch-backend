@@ -12,12 +12,32 @@ spring:
       ddl-auto: validate
     open-in-view: false
 
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
   flyway:
     enabled: true
     locations: classpath:db/migration
+    placeholders:
+      collectionCutoverDate: '${EKOWATCH_COLLECTION_CUTOVER_DATE:AUTO}'
+      collectionMigrationMapping: '${EKOWATCH_COLLECTION_MIGRATION_MAPPING:[]}'
 
 server:
   port: ${PORT:8081}
 logging:
   pattern:
     level: '%5p [requestId=%X{requestId:-}]'
+
+ekowatch:
+  flood-freshness-hours: ${EKOWATCH_FLOOD_FRESHNESS_HOURS:6}
+  auth:
+    token-secret: ${EKOWATCH_TOKEN_SECRET:ekowatch-local-dev-secret-key-at-least-32-bytes}
+    session-ttl-hours: ${EKOWATCH_SESSION_TTL_HOURS:8}
+  cloudinary:
+    url: ${CLOUDINARY_URL:}
+    cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+    api-key: ${CLOUDINARY_API_KEY:}
+    api-secret: ${CLOUDINARY_API_SECRET:}
+    folder: ${CLOUDINARY_FOLDER:ekowatch/photos}

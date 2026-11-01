@@ -32,7 +32,7 @@ class ReportMigrationTest {
 
     Flyway flyway(String target) {
         return Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema)
-                .locations("classpath:db/migration").target(target).load();
+                .locations("classpath:db/migration").placeholders(Map.of("collectionCutoverDate","AUTO","collectionMigrationMapping","[]")).target(target).load();
     }
 
     void baseRows() {
@@ -88,6 +88,31 @@ class ReportMigrationTest {
             assertEquals(new HashSet<>(before.get(table)), new HashSet<>(after), table);
         }
         assertEquals(0, flyway("2").migrate().migrationsExecuted);
+        assertEquals(4,flyway("6").migrate().migrationsExecuted);
+        for(String table:tables) {
+            String target=switch(table) {
+                case "collection_schedules" -> "legacy_collection_schedules";
+                case "pickups" -> "legacy_pickups";
+                case "confirmations" -> "report_confirmations";
+                default -> table;
+            };
+            var after=db.queryForList("select * from "+target);
+            for(var row:after) {
+                if(table.equals("reports")) {
+                    row.put("description",row.remove("note"));
+                    for(String column:List.of("photo_id","latitude","longitude","collection_date")) assertNull(row.remove(column));
+                }
+                if(table.equals("users")) { assertNull(row.remove("ward_id")); assertNull(row.remove("street_id")); }
+                if(table.equals("streets")) { assertNull(row.remove("latitude")); assertNull(row.remove("longitude")); }
+                if(table.equals("confirmations")) { row.put("user_id",row.remove("resident_id")); row.put("created_at",row.remove("confirmed_at")); }
+            }
+            assertEquals(new HashSet<>(before.get(table)),new HashSet<>(after),target);
+        }
+        var completed=before.get("pickups").stream().filter(r->r.get("status").equals("COMPLETED")).findFirst().orElseThrow();
+        assertEquals(completed.get("id"),db.queryForObject("select id from collections",UUID.class));
+        assertEquals(completed.get("created_at"),db.queryForObject("select completed_at from collections",java.sql.Timestamp.class));
+        assertEquals(0,db.queryForObject("select count(*) from idempotency_records",Integer.class));
+        assertEquals(0,flyway("6").migrate().migrationsExecuted);
         try (var context = new SpringApplicationBuilder(EkoWatchApplication.class).web(WebApplicationType.NONE).run(
                 "--spring.datasource.url=" + url, "--spring.datasource.username=" + pg.getUsername(),
                 "--spring.datasource.password=" + pg.getPassword(), "--spring.jpa.hibernate.ddl-auto=validate",

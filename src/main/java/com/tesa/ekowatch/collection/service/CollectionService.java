@@ -1,41 +1,93 @@
 package com.tesa.ekowatch.collection.service;
 
-import com.tesa.ekowatch.collection.api.CollectionApi;
+import com.tesa.ekowatch.collection.api.*;
 import com.tesa.ekowatch.user.api.ActorAccess;
-import com.tesa.ekowatch.shared.RuleViolation;
+import com.tesa.ekowatch.ward.api.StreetView;
+import com.tesa.ekowatch.shared.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import org.springframework.transaction.annotation.Isolation;
+import java.sql.Timestamp;
 import java.time.*;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 @Service
-@Transactional
+@Transactional(readOnly=true)
 public class CollectionService implements CollectionApi {
+    private static final ZoneId LAGOS=ZoneId.of("Africa/Lagos");
     private final JdbcTemplate db;
     private final ActorAccess actors;
-
-    public CollectionService(JdbcTemplate db, ActorAccess actors) {
-        this.db = db;
-        this.actors = actors;
+    private final Clock clock;
+    public CollectionService(JdbcTemplate db, ActorAccess actors, Clock clock) {
+        this.db=db; this.actors=actors; this.clock=clock;
     }
 
-    public void recordPickup(UUID actor, UUID street, LocalDate date, String status) {
-        actors.requireRole(actor, "OPERATOR");
-        if (date == null || date.isAfter(LocalDate.now(ZoneId.of("Africa/Lagos"))) || !("COMPLETED".equals(status) || "FAILED".equals(status)))
-            throw new RuleViolation("INVALID_PICKUP");
-        if (!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from streets s join operator_wards o on o.ward_id=s.ward_id where s.id=? and o.operator_id=?)", Boolean.class, street, actor)))
-            throw new RuleViolation("FORBIDDEN");
-        if (db.update("insert into pickups(id,street_id,pickup_date,status,recorded_by) values (?,?,?,?,?) on conflict on constraint uq_pickup_street_date do nothing", UUID.randomUUID(), street, date, status, actor) == 0)
-            throw new RuleViolation("DUPLICATE_PICKUP");
+    private void range(LocalDate from,LocalDate to) {
+        if(from==null || to==null || from.isAfter(to) || ChronoUnit.DAYS.between(from,to)>30)
+            throw new RuleViolation("VALIDATION_FAILED");
     }
 
-    @Transactional(readOnly = true)
-    public List<MissedPickup> missed(UUID actor, LocalDate from, LocalDate through) {
-        actors.requireRole(actor, "AUTHORITY");
-        if (from == null || through == null || from.isAfter(through) || java.time.temporal.ChronoUnit.DAYS.between(from, through) > 366 || !through.isBefore(LocalDate.now(ZoneId.of("Africa/Lagos"))))
-            throw new RuleViolation("INVALID_DATE_RANGE");
-        return db.query("select s.street_id,d::date as scheduled_date from collection_schedules s cross join generate_series(cast(? as date),cast(? as date),interval '1 day') d where s.active and s.scheduled_day=extract(isodow from d) and not exists(select 1 from pickups p where p.street_id=s.street_id and p.pickup_date=d::date and p.status='COMPLETED') order by scheduled_date,s.street_id", (r, n) -> new MissedPickup(r.getObject(1, UUID.class), r.getObject(2, LocalDate.class)), from, through);
+    public List<CollectionScheduleView> listCollectionSchedules(UUID actorId,UUID wardId,LocalDate fromDate,LocalDate toDate) {
+        actors.requireUser(actorId); range(fromDate,toDate);
+        if(wardId==null) throw new RuleViolation("VALIDATION_FAILED");
+        if(!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from wards where id=?)",Boolean.class,wardId)))
+            throw new RuleViolation("RESOURCE_NOT_FOUND");
+        LocalDate today=LocalDate.ofInstant(clock.instant(),LAGOS);
+        return db.query("""
+            select cs.id,s.ward_id,cs.street_id,s.name,cs.collection_date,c.completed_at,
+             (select count(*) from reports r where r.street_id=cs.street_id
+               and r.collection_date=cs.collection_date and r.report_type='MISSED_PICKUP') missed_report_count
+            from collection_schedules cs join streets s on s.id=cs.street_id
+            left join collections c on c.street_id=cs.street_id and c.collection_date=cs.collection_date
+            where s.ward_id=? and cs.collection_date between ? and ?
+            order by cs.collection_date,s.name,cs.street_id,cs.id
+            """,(r,n)-> {
+                Timestamp completed=r.getTimestamp("completed_at");
+                LocalDate date=r.getObject("collection_date",LocalDate.class);
+                CollectionStatus status=completed!=null ? (r.getLong("missed_report_count")>0 ? CollectionStatus.DISPUTED : CollectionStatus.DONE) :
+                        date.isBefore(today) ? CollectionStatus.MISSED : CollectionStatus.SCHEDULED;
+                return new CollectionScheduleView(r.getObject("id",UUID.class),r.getObject("ward_id",UUID.class),
+                        r.getObject("street_id",UUID.class),r.getString("name"),date,status,
+                        completed==null ? null : completed.toInstant(),r.getLong("missed_report_count"));
+            },wardId,fromDate,toDate);
+    }
+
+    public List<StreetView> listMyAssignedStreets(UUID actorId,LocalDate fromDate,LocalDate toDate) {
+        actors.requireRole(actorId,"OPERATOR"); range(fromDate,toDate);
+        return db.query("""
+            select distinct s.id,s.ward_id,s.name,s.latitude,s.longitude from collection_schedules cs
+            join streets s on s.id=cs.street_id join operator_wards ow on ow.ward_id=s.ward_id and ow.operator_id=cs.operator_id
+            where cs.operator_id=? and cs.collection_date between ? and ? order by s.name,s.id
+            """,(r,n)->new StreetView(r.getObject("id",UUID.class),r.getObject("ward_id",UUID.class),r.getString("name"),
+                r.getObject("latitude")==null ? null : new Location(r.getDouble("latitude"),r.getDouble("longitude"))),
+                actorId,fromDate,toDate);
+    }
+
+    @Transactional(isolation=Isolation.READ_COMMITTED)
+    public CollectionView recordCollection(UUID actorId,UUID streetId,LocalDate collectionDate) {
+        return com.tesa.ekowatch.shared.OperationLog.record("recordCollection", () -> {
+            actors.requireRole(actorId,"OPERATOR");
+            Instant now=clock.instant().truncatedTo(ChronoUnit.MICROS);
+            if(streetId==null || collectionDate==null || collectionDate.isAfter(LocalDate.ofInstant(now,LAGOS)))
+                throw new RuleViolation("VALIDATION_FAILED");
+            var wards=db.query("select ward_id from streets where id=?",(r,n)->r.getObject(1,UUID.class),streetId);
+            if(wards.isEmpty()) throw new RuleViolation("RESOURCE_NOT_FOUND");
+            if(!Boolean.TRUE.equals(db.queryForObject("select exists(select 1 from operator_wards where operator_id=? and ward_id=?)",
+                    Boolean.class,actorId,wards.getFirst()))) throw new RuleViolation("WARD_ASSIGNMENT_REQUIRED");
+            var scheduled=db.query("select operator_id from collection_schedules where street_id=? and collection_date=?",
+                    (r,n)->r.getObject(1,UUID.class),streetId,collectionDate);
+            if(scheduled.isEmpty()) throw new RuleViolation("VALIDATION_FAILED");
+            if(!actorId.equals(scheduled.getFirst())) throw new RuleViolation("FORBIDDEN");
+            db.update("""
+                insert into collections(id,street_id,collection_date,completed_by,completed_at) values (?,?,?,?,?)
+                on conflict on constraint uq_collection_street_date do nothing
+                """,UUID.randomUUID(),streetId,collectionDate,actorId,Timestamp.from(now));
+            return db.queryForObject("select c.*, exists(select 1 from reports r where r.street_id=c.street_id and r.collection_date=c.collection_date and r.report_type='MISSED_PICKUP') disputed from collections c where street_id=? and collection_date=?",
+                (r,n)->new CollectionView(r.getObject("id",UUID.class),r.getObject("street_id",UUID.class),
+                    r.getObject("collection_date",LocalDate.class),r.getTimestamp("completed_at").toInstant(),r.getBoolean("disputed") ? CollectionStatus.DISPUTED : CollectionStatus.DONE),
+                streetId,collectionDate);
+        });
     }
 }
