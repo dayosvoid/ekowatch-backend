@@ -1,18 +1,34 @@
 package com.tesa.ekowatch.report.web;
 
-import com.tesa.ekowatch.report.api.*;
+import com.tesa.ekowatch.report.api.CreateReportRequest;
+import com.tesa.ekowatch.report.api.FloodStatus;
+import com.tesa.ekowatch.report.api.ReportApi;
+import com.tesa.ekowatch.report.api.ReportSort;
+import com.tesa.ekowatch.report.api.ReportType;
+import com.tesa.ekowatch.report.api.ReportView;
+import com.tesa.ekowatch.report.api.WardHazardsView;
 import com.tesa.ekowatch.shared.Page;
+import com.tesa.ekowatch.shared.RuleViolation;
 import com.tesa.ekowatch.user.api.ActorAccess;
 import jakarta.validation.Valid;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URI;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/reports")
+@RequestMapping("/api/v1")
 public class ReportController {
+
     private final ReportApi reports;
     private final ActorAccess actors;
 
@@ -21,20 +37,39 @@ public class ReportController {
         this.actors = actors;
     }
 
-    @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public ReportView create(Authentication authentication, @Valid @RequestBody CreateReportRequest request) {
-        // Esther must supply the parsed Idempotency-Key; no key is invented by this adapter.
-        return reports.createReport(actors.id(authentication), null, request);
+    @PostMapping("/reports")
+    public ResponseEntity<ReportView> createReport(
+            Authentication authentication,
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKeyHeader,
+            @Valid @RequestBody CreateReportRequest request) {
+
+        UUID actorId = actors.id(authentication);
+        if (idempotencyKeyHeader == null || idempotencyKeyHeader.isBlank()) {
+            throw new RuleViolation("IDEMPOTENCY_KEY_REQUIRED");
+        }
+        UUID idempotencyKey;
+        try {
+            idempotencyKey = UUID.fromString(idempotencyKeyHeader.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new RuleViolation("VALIDATION_FAILED");
+        }
+
+        ReportView created = reports.createReport(actorId, idempotencyKey, request);
+        URI location = created != null && created.reportId() != null
+                ? URI.create("/api/v1/reports/" + created.reportId())
+                : URI.create("/api/v1/reports");
+        return ResponseEntity.created(location).body(created);
     }
 
-    @GetMapping("/{reportId}")
-    public ReportView get(Authentication authentication, @PathVariable UUID reportId) {
+    @GetMapping("/reports/{reportId}")
+    public ReportView getReport(
+            Authentication authentication,
+            @PathVariable UUID reportId) {
         return reports.getReport(actors.id(authentication), reportId);
     }
 
-    @GetMapping
-    public Page<ReportView> list(
+    @GetMapping("/reports")
+    public Page<ReportView> listReports(
             Authentication authentication,
             @RequestParam UUID wardId,
             @RequestParam(required = false) UUID streetId,
@@ -43,6 +78,22 @@ public class ReportController {
             @RequestParam(defaultValue = "0") Integer page,
             @RequestParam(defaultValue = "20") Integer size,
             @RequestParam(defaultValue = "CONFIRMATIONS") ReportSort sort) {
-        return reports.listReports(actors.id(authentication), wardId, streetId, reportType, floodStatus, page, size, sort);
+        return reports.listReports(
+                actors.id(authentication),
+                wardId,
+                streetId,
+                reportType,
+                floodStatus,
+                page,
+                size,
+                sort
+        );
+    }
+
+    @GetMapping("/wards/{wardId}/hazards")
+    public WardHazardsView listWardHazards(
+            Authentication authentication,
+            @PathVariable UUID wardId) {
+        return reports.listWardHazards(actors.id(authentication), wardId);
     }
 }
