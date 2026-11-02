@@ -8,6 +8,12 @@ import com.tesa.ekowatch.shared.RuleViolation;
 import com.tesa.ekowatch.user.api.ActorAccess;
 import com.tesa.ekowatch.ward.api.StreetView;
 import com.tesa.ekowatch.ward.api.WardApi;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -31,6 +37,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
 @RequestMapping("/api/v1")
+@Tag(name = "Collections", description = "Collection schedule lookups and idempotent operator pickup recording")
+@SecurityRequirement(name = "bearerAuth")
 public class CollectionController {
 
     private final CollectionApi collections;
@@ -56,6 +64,11 @@ public class CollectionController {
     }
 
     @GetMapping("/collection-schedules")
+    @Operation(
+            operationId = "listCollectionSchedules",
+            summary = "List collection schedules with derived collectionStatus (SCHEDULED, DONE, MISSED, DISPUTED)",
+            description = "Requires `Authorization: Bearer <token>`. Date range `fromDate`..`toDate` is inclusive (max 31 days)."
+    )
     public Page<CollectionScheduleView> listCollectionSchedules(
             Authentication authentication,
             @RequestParam UUID wardId,
@@ -100,6 +113,28 @@ public class CollectionController {
     }
 
     @PutMapping("/streets/{streetId}/collections/{collectionDate}")
+    @Operation(
+            operationId = "recordCollection",
+            summary = "Record waste collection completion idempotently (201 first time, 200 if already done)",
+            description = """
+                    Requires Role: `OPERATOR` assigned to the street's ward and scheduled for `(streetId, collectionDate)`.
+                    - **Returns `201 Created`** the first time the street is marked done for `collectionDate`.
+                    - **Returns `200 OK`** when the street is already marked done for `collectionDate` (existing `CollectionView` is returned without overwriting `completedAt`).
+                    - Returns `403 WARD_ASSIGNMENT_REQUIRED` if the operator is not assigned to the street's ward, or `403 FORBIDDEN` if not scheduled for that street/date.
+                    """,
+            responses = {
+                    @ApiResponse(
+                            responseCode = "201",
+                            description = "First time collection recorded for this street and date",
+                            content = @Content(mediaType = "application/json", schema = @Schema(implementation = CollectionView.class))
+                    ),
+                    @ApiResponse(
+                            responseCode = "200",
+                            description = "Street was already marked done for this date (existing record returned without overwriting completedAt)",
+                            content = @Content(mediaType = "application/json", schema = @Schema(implementation = CollectionView.class))
+                    )
+            }
+    )
     public ResponseEntity<CollectionView> recordCollection(
             Authentication authentication,
             @PathVariable UUID streetId,
