@@ -61,6 +61,38 @@ Full OpenAPI specification: [`contracts/openapi.yaml`](contracts/openapi.yaml) (
    mvn -B verify
    ```
 
+## Demonstration Credentials (MVP Evaluation)
+
+By security design, seeded accounts in `demo.sql` are initialized with an unusable password marker (`!DEMO_LOGIN_DISABLED`). For local and staging demonstration, BCrypt credentials are deliberately provisioned for the **five approved demo accounts** (see [`docs/demo-provisioning.md`](docs/demo-provisioning.md)):
+
+| Role | Email | Seeded Persona / Location | Use Case |
+| --- | --- | --- | --- |
+| `RESIDENT` | `demo1@example.invalid` | Ward 1, Street 1 (*Fictional Palm Street*) | Creates waste & flood reports, uploads sanitised photos |
+| `RESIDENT` | `demo2@example.invalid` | Ward 1, Street 2 (*Fictional Bamboo Street*) | Confirms existing community reports |
+| `OPERATOR` | `demo4@example.invalid` | Assigned to Ward 1 (Streets 1–4) | Views assigned streets, records pickup completion |
+| `OPERATOR` | `demo8@example.invalid` | Deliberately unassigned | Exercises the `403 WARD_ASSIGNMENT_REQUIRED` guard |
+| `AUTHORITY` | `demo5@example.invalid` | Authority oversight | Accesses Ward 1 KPIs, hotspots, and triage dashboard |
+
+*Accounts `demo3@example.invalid`, `demo6@example.invalid`, and `demo7@example.invalid` remain locked at `!DEMO_LOGIN_DISABLED`.*
+
+## Known Limitations & Simulated Features
+
+- **In-App Camera vs Gallery Capture:** Browsers and web clients cannot reliably guarantee direct camera capture versus camera gallery file selection. The API accepts standard multipart file uploads (`POST /api/v1/photos`), completely strips all EXIF/GPS/XMP metadata via pixel re-encoding, and attaches an authoritative server timestamp upon ingestion.
+- **Fictional Data Notice:** All names, telephone numbers, and community activity in the demo seed are completely fictional. Wards and streets use real Lagos place names for geographical context, as allowed by the project fairness guidelines.
+- **Out of Scope (Phase 2):** Route dispatch optimization, resident chat/push notifications, SMS/USSD alerts, and live identity verification.
+
+## Deployment & Free-Tier Verification
+
+- **Backend Service:** Spring Boot application deployed via container/JVM hosting on a free tier.
+- **Database:** Managed PostgreSQL instance on Neon free tier (checked 31 October 2026; within free storage limits and no project expiration during evaluation).
+- **Frontend Interface:** Deployed on Qocent hosting (`https://eko-watch--cflk38sh3.qocent.app`), with full CORS support enabled.
+- **CI / CD Pipeline:** GitHub Actions workflow ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) running `mvn -B verify` (107 unit, integration, and architecture tests) on every push and PR.
+
+## Decision Records & AI Log
+
+- **Architecture Decision Records:** See [`docs/decisions.md`](docs/decisions.md) and [`docs/adr/`](docs/adr/) for ADR 001 (Confirmation & Flood Freshness) and ADR 002 (Derived Disputed Pickups).
+- **AI Tooling & Verification Log:** See [`docs/ai-log.md`](docs/ai-log.md) for tools used, prompts, accepted code, and three concrete cases where AI output was checked, found incorrect, and corrected.
+
 ## Team Ownership
 
 - **Adedayo (Engineer A — Data & Rules)**: Schema migrations `V1`–`V6`, domain entities, transactional data services, concurrency/idempotency rules, demo seed, and query-plan verification.
