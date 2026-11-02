@@ -4,6 +4,9 @@ import com.tesa.ekowatch.photo.api.PhotoApi;
 import com.tesa.ekowatch.photo.api.PhotoView;
 import com.tesa.ekowatch.shared.RuleViolation;
 import com.tesa.ekowatch.user.api.ActorAccess;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -21,6 +24,8 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/photos")
+@Tag(name = "Photos", description = "Resident photo upload with EXIF/GPS/XMP sanitisation and Cloudinary storage")
+@SecurityRequirement(name = "bearerAuth")
 public class PhotoController {
 
     private final PhotoApi photos;
@@ -33,6 +38,11 @@ public class PhotoController {
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(
+            operationId = "uploadPhoto",
+            summary = "Upload and sanitise a resident report photo (JPEG/PNG, max 5 MiB, returns 201 Created)",
+            description = "Requires Role: `RESIDENT`. Strips all EXIF/GPS/XMP metadata before storing in Cloudinary. Returns `413 PHOTO_TOO_LARGE` if > 5 MiB, or `415 UNSUPPORTED_PHOTO_TYPE` if not JPEG/PNG."
+    )
     public PhotoView uploadPhoto(
             Authentication authentication,
             @RequestPart(value = "file", required = false) MultipartFile file) {
@@ -51,6 +61,11 @@ public class PhotoController {
     }
 
     @GetMapping("/{photoId}")
+    @Operation(
+            operationId = "getPhoto",
+            summary = "Get sanitised photo metadata and resolved URL",
+            description = "Requires `Authorization: Bearer <token>`. Readable by the photo owner or when attached as report evidence."
+    )
     public PhotoView getPhoto(
             Authentication authentication,
             @PathVariable UUID photoId) {

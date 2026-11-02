@@ -117,11 +117,37 @@ public class ApiExceptionHandler {
         );
     }
 
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ResponseEntity<ApiError> handleMissingHeader(
+            MissingRequestHeaderException exception,
+            HttpServletRequest request) {
+
+        if ("Idempotency-Key".equalsIgnoreCase(exception.getHeaderName())) {
+            return problemResponse(
+                    HttpStatus.BAD_REQUEST,
+                    typeFor("IDEMPOTENCY_KEY_REQUIRED"),
+                    titleFor("IDEMPOTENCY_KEY_REQUIRED"),
+                    "IDEMPOTENCY_KEY_REQUIRED",
+                    detailFor("IDEMPOTENCY_KEY_REQUIRED"),
+                    request,
+                    null
+            );
+        }
+        return problemResponse(
+                HttpStatus.BAD_REQUEST,
+                typeFor("VALIDATION_FAILED"),
+                titleFor("VALIDATION_FAILED"),
+                "VALIDATION_FAILED",
+                detailFor("VALIDATION_FAILED"),
+                request,
+                null
+        );
+    }
+
     @ExceptionHandler({
             HttpMessageNotReadableException.class,
             MethodArgumentTypeMismatchException.class,
             MissingServletRequestParameterException.class,
-            MissingRequestHeaderException.class,
             MissingServletRequestPartException.class,
             MultipartException.class
     })

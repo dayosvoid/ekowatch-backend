@@ -3,6 +3,10 @@ package com.tesa.ekowatch.collection.web;
 import com.tesa.ekowatch.collection.api.CollectionApi;
 import com.tesa.ekowatch.user.api.ActorAccess;
 import com.tesa.ekowatch.ward.api.StreetView;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.core.Authentication;
@@ -18,6 +22,8 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/operators")
+@Tag(name = "Operators", description = "Waste operator assigned streets")
+@SecurityRequirement(name = "bearerAuth")
 public class OperatorController {
 
     private static final ZoneId LAGOS = ZoneId.of("Africa/Lagos");
@@ -38,9 +44,20 @@ public class OperatorController {
     }
 
     @GetMapping("/me/streets")
+    @Operation(
+            operationId = "listMyAssignedStreets",
+            summary = "List distinct streets scheduled for the authenticated operator in the date range",
+            description = """
+                    Requires Role: `OPERATOR` (`Authorization: Bearer <token>`).
+                    - **How `fromDate` and `toDate` filter**: Returns only the distinct streets in the operator's assigned ward(s) (`operator_wards`) that have a scheduled pickup assigned to this authenticated operator in `collection_schedules` between `fromDate` and `toDate` (inclusive, max 31-day window).
+                    - If `fromDate` and `toDate` are omitted, defaults to today (in `Africa/Lagos`) through `today + 29 days`.
+                    """
+    )
     public List<StreetView> listMyAssignedStreets(
             Authentication authentication,
+            @Parameter(description = "Start date (ISO YYYY-MM-DD, inclusive). Defaults to today in Africa/Lagos if omitted.")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            @Parameter(description = "End date (ISO YYYY-MM-DD, inclusive, max 30 days after fromDate). Defaults to fromDate + 29 days if omitted.")
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate) {
 
         LocalDate today = LocalDate.ofInstant(clock.instant(), LAGOS);
