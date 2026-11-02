@@ -1,0 +1,1158 @@
+openapi: 3.0.3
+
+info:
+  title: EkoWatch API
+  description: >-
+    Neighborhood Waste & Flood Alert System (Lagos) — Canonical REST API v1 for
+    ward/street lookup, collection schedule and completion tracking, resident
+    waste and flood reporting with photo sanitisation, community confirmation,
+    flood-freshness hazards, and local-authority ward analytics.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8081
+    description: Local development server
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/auth/sessions:
+    post:
+      operationId: createSession
+      summary: Authenticate user and issue a Bearer session token
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '200':
+          description: Authenticated session created
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: Login alias for POST /api/v1/auth/sessions
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '200':
+          description: Authenticated session created
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /api/v1/users/me:
+    get:
+      operationId: getCurrentUser
+      summary: Get the authenticated user's profile and ward/street preferences
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      responses:
+        '200':
+          description: Current user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /api/v1/users/me/preferences:
+    put:
+      operationId: updateMyPreferences
+      summary: Set or update the authenticated resident's ward and street preference
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePreferencesRequest'
+      responses:
+        '200':
+          description: Updated user profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUserView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/wards:
+    get:
+      operationId: listWards
+      summary: List all wards ordered by name
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      responses:
+        '200':
+          description: List of wards
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WardView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /api/v1/wards/{wardId}/streets:
+    get:
+      operationId: listStreets
+      summary: List streets belonging to a ward
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/WardIdPath'
+      responses:
+        '200':
+          description: List of streets in the ward
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StreetView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/collection-schedules:
+    get:
+      operationId: listCollectionSchedules
+      summary: List collection schedules with derived collectionStatus
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: wardId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: fromDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: toDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: streetId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/PageQuery'
+        - $ref: '#/components/parameters/SizeQuery'
+      responses:
+        '200':
+          description: Page of collection schedules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageCollectionScheduleView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/operators/me/streets:
+    get:
+      operationId: listMyAssignedStreets
+      summary: List streets assigned to the authenticated waste operator
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: fromDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+        - name: toDate
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Operator assigned streets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StreetView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/streets/{streetId}/collections/{collectionDate}:
+    put:
+      operationId: recordCollection
+      summary: Record waste collection completion idempotently for a street and date
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: streetId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: collectionDate
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '201':
+          description: Collection completion recorded (first insert)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionView'
+        '200':
+          description: Collection completion already recorded (no timestamp overwrite)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollectionView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/photos:
+    post:
+      operationId: uploadPhoto
+      summary: Upload and sanitise a resident report photo (JPEG/PNG, max 5 MiB)
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Photo sanitised and stored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PhotoTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedPhotoType'
+
+  /api/v1/photos/{photoId}:
+    get:
+      operationId: getPhoto
+      summary: Get sanitised photo metadata and resolved URL
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: photoId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Sanitised photo metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PhotoView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/reports:
+    post:
+      operationId: createReport
+      summary: Create a resident waste or flood report idempotently
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Client-generated UUID for idempotent report creation
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReportRequest'
+      responses:
+        '201':
+          description: Report created (or idempotently replayed)
+          headers:
+            Location:
+              description: URI of the created report
+              schema:
+                type: string
+                format: uri
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+    get:
+      operationId: listReports
+      summary: List reports in a ward with filtering, sorting, and pagination
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: wardId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: streetId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: reportType
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ReportType'
+        - name: floodStatus
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/FloodStatus'
+        - $ref: '#/components/parameters/PageQuery'
+        - $ref: '#/components/parameters/SizeQuery'
+        - name: sort
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ReportSort'
+            default: CONFIRMATIONS
+      responses:
+        '200':
+          description: Page of reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageReportView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/reports/{reportId}:
+    get:
+      operationId: getReport
+      summary: Get a single report by ID
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Report view
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/reports/{reportId}/confirmations/me:
+    put:
+      operationId: confirmReport
+      summary: Confirm an existing community report idempotently ("same here")
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Updated report view after confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /api/v1/wards/{wardId}/hazards:
+    get:
+      operationId: listWardHazards
+      summary: List ward hazard layers (blocked drains, current floods, historical floods)
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/WardIdPath'
+      responses:
+        '200':
+          description: Ward hazard collections
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardHazardsView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+  /api/v1/wards/{wardId}/dashboard:
+    get:
+      operationId: getWardDashboard
+      summary: Get local-authority ward analytics dashboard for a date range
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+        - $ref: '#/components/parameters/WardIdPath'
+        - name: fromDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: toDate
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Ward analytics dashboard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WardDashboardView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/ResourceNotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: HMAC-SHA256
+
+  headers:
+    XRequestId:
+      description: Request correlation identifier
+      schema:
+        type: string
+
+  parameters:
+    RequestIdHeader:
+      name: X-Request-Id
+      in: header
+      required: false
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,64}$'
+
+    WardIdPath:
+      name: wardId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    PageQuery:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+    SizeQuery:
+      name: size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    Role:
+      type: string
+      enum:
+        - RESIDENT
+        - OPERATOR
+        - AUTHORITY
+
+    ReportType:
+      type: string
+      enum:
+        - MISSED_PICKUP
+        - ILLEGAL_DUMPING
+        - BLOCKED_DRAIN
+        - FLOODED_ROAD
+
+    FloodStatus:
+      type: string
+      enum:
+        - CURRENT
+        - EXPIRED
+
+    CollectionStatus:
+      type: string
+      enum:
+        - SCHEDULED
+        - DONE
+        - MISSED
+        - DISPUTED
+
+    ReportSort:
+      type: string
+      enum:
+        - CONFIRMATIONS
+        - NEWEST
+
+    Location:
+      type: object
+      required:
+        - latitude
+        - longitude
+      properties:
+        latitude:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+
+    CreateSessionRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+
+    CurrentUserView:
+      type: object
+      required:
+        - userId
+        - email
+        - displayName
+        - role
+      properties:
+        userId:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        displayName:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        wardId:
+          type: string
+          format: uuid
+          nullable: true
+        streetId:
+          type: string
+          format: uuid
+          nullable: true
+
+    SessionView:
+      type: object
+      required:
+        - accessToken
+        - tokenType
+        - expiresAt
+        - user
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/CurrentUserView'
+
+    UpdatePreferencesRequest:
+      type: object
+      required:
+        - wardId
+        - streetId
+      properties:
+        wardId:
+          type: string
+          format: uuid
+        streetId:
+          type: string
+          format: uuid
+
+    WardView:
+      type: object
+      required:
+        - wardId
+        - wardName
+      properties:
+        wardId:
+          type: string
+          format: uuid
+        wardName:
+          type: string
+
+    StreetView:
+      type: object
+      required:
+        - streetId
+        - wardId
+        - streetName
+      properties:
+        streetId:
+          type: string
+          format: uuid
+        wardId:
+          type: string
+          format: uuid
+        streetName:
+          type: string
+        mapLocation:
+          $ref: '#/components/schemas/Location'
+
+    CollectionScheduleView:
+      type: object
+      required:
+        - scheduleId
+        - wardId
+        - streetId
+        - streetName
+        - collectionDate
+        - collectionStatus
+        - missedReportCount
+      properties:
+        scheduleId:
+          type: string
+          format: uuid
+        wardId:
+          type: string
+          format: uuid
+        streetId:
+          type: string
+          format: uuid
+        streetName:
+          type: string
+        collectionDate:
+          type: string
+          format: date
+        collectionStatus:
+          $ref: '#/components/schemas/CollectionStatus'
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        missedReportCount:
+          type: integer
+          format: int64
+
+    CollectionView:
+      type: object
+      required:
+        - collectionId
+        - streetId
+        - collectionDate
+        - completedAt
+        - collectionStatus
+      properties:
+        collectionId:
+          type: string
+          format: uuid
+        streetId:
+          type: string
+          format: uuid
+        collectionDate:
+          type: string
+          format: date
+        completedAt:
+          type: string
+          format: date-time
+        collectionStatus:
+          $ref: '#/components/schemas/CollectionStatus'
+
+    PhotoView:
+      type: object
+      required:
+        - photoId
+        - contentType
+        - sizeBytes
+        - createdAt
+      properties:
+        photoId:
+          type: string
+          format: uuid
+        photoUrl:
+          type: string
+          nullable: true
+        contentType:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+        sizeBytes:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateReportRequest:
+      type: object
+      required:
+        - reportType
+        - streetId
+        - note
+      properties:
+        reportType:
+          $ref: '#/components/schemas/ReportType'
+        streetId:
+          type: string
+          format: uuid
+        note:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        photoId:
+          type: string
+          format: uuid
+          nullable: true
+        location:
+          $ref: '#/components/schemas/Location'
+        collectionDate:
+          type: string
+          format: date
+          nullable: true
+
+    ReportView:
+      type: object
+      required:
+        - reportId
+        - reportType
+        - wardId
+        - streetId
+        - streetName
+        - note
+        - createdAt
+        - confirmationCount
+        - confirmedByMe
+        - lastEvidenceAt
+        - locationPrecision
+      properties:
+        reportId:
+          type: string
+          format: uuid
+        reportType:
+          $ref: '#/components/schemas/ReportType'
+        wardId:
+          type: string
+          format: uuid
+        streetId:
+          type: string
+          format: uuid
+        streetName:
+          type: string
+        note:
+          type: string
+        photoUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        collectionDate:
+          type: string
+          format: date
+          nullable: true
+        confirmationCount:
+          type: integer
+          format: int64
+        confirmedByMe:
+          type: boolean
+        lastEvidenceAt:
+          type: string
+          format: date-time
+        floodStatus:
+          $ref: '#/components/schemas/FloodStatus'
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        mapLocation:
+          $ref: '#/components/schemas/Location'
+        locationPrecision:
+          type: string
+          enum:
+            - STREET
+
+    WardHazardsView:
+      type: object
+      required:
+        - wardId
+        - generatedAt
+        - items
+      properties:
+        wardId:
+          type: string
+          format: uuid
+        generatedAt:
+          type: string
+          format: date-time
+        newestReportAt:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportView'
+
+    OperatorPerformanceView:
+      type: object
+      required:
+        - operatorId
+        - operatorName
+        - scheduledPickupCount
+        - completedPickupCount
+        - missedPickupCount
+        - disputedPickupCount
+      properties:
+        operatorId:
+          type: string
+          format: uuid
+        operatorName:
+          type: string
+        scheduledPickupCount:
+          type: integer
+          format: int64
+        completedPickupCount:
+          type: integer
+          format: int64
+        missedPickupCount:
+          type: integer
+          format: int64
+        disputedPickupCount:
+          type: integer
+          format: int64
+
+    WardDashboardView:
+      type: object
+      required:
+        - wardId
+        - fromDate
+        - toDate
+        - generatedAt
+        - missedPickupCount
+        - disputedPickupCount
+        - blockedDrainCount
+        - currentFloodCount
+        - operatorPerformance
+      properties:
+        wardId:
+          type: string
+          format: uuid
+        fromDate:
+          type: string
+          format: date
+        toDate:
+          type: string
+          format: date
+        generatedAt:
+          type: string
+          format: date-time
+        missedPickupCount:
+          type: integer
+          format: int64
+        disputedPickupCount:
+          type: integer
+          format: int64
+        blockedDrainCount:
+          type: integer
+          format: int64
+        currentFloodCount:
+          type: integer
+          format: int64
+        newestReportAt:
+          type: string
+          format: date-time
+          nullable: true
+        operatorPerformance:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatorPerformanceView'
+
+    PageReportView:
+      type: object
+      required:
+        - items
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReportView'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    PageCollectionScheduleView:
+      type: object
+      required:
+        - items
+        - page
+        - size
+        - totalElements
+        - totalPages
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CollectionScheduleView'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64
+        totalPages:
+          type: integer
+
+    FieldError:
+      type: object
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+
+    ProblemDetail:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - code
+        - detail
+        - requestId
+      properties:
+        type:
+          type: string
+          example: urn:ekowatch:problem:validation
+        title:
+          type: string
+          example: Validation failed
+        status:
+          type: integer
+          example: 400
+        code:
+          type: string
+          enum:
+            - VALIDATION_FAILED
+            - IDEMPOTENCY_KEY_REQUIRED
+            - UNAUTHENTICATED
+            - FORBIDDEN
+            - WARD_ASSIGNMENT_REQUIRED
+            - RESOURCE_NOT_FOUND
+            - SELF_CONFIRMATION_NOT_ALLOWED
+            - IDEMPOTENCY_KEY_REUSED
+            - PHOTO_TOO_LARGE
+            - UNSUPPORTED_PHOTO_TYPE
+            - INTERNAL_ERROR
+        detail:
+          type: string
+        instance:
+          type: string
+          nullable: true
+        requestId:
+          type: string
+        fieldErrors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+
+  responses:
+    ValidationFailed:
+      description: Validation failed or required Idempotency-Key missing
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    Unauthenticated:
+      description: Authentication required or invalid credentials/token
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    Forbidden:
+      description: Role or ward assignment does not permit this operation
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    ResourceNotFound:
+      description: Requested ward, street, report, or photo was not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    Conflict:
+      description: Self-confirmation or idempotency key payload mismatch
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    PhotoTooLarge:
+      description: Uploaded photo exceeds 5 MiB limit
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+
+    UnsupportedPhotoType:
+      description: Uploaded photo is not a valid JPEG or PNG image
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'

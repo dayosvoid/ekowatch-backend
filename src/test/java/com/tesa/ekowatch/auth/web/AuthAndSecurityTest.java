@@ -4,19 +4,29 @@ import com.tesa.ekowatch.auth.api.CreateSessionRequest;
 import com.tesa.ekowatch.auth.api.SessionView;
 import com.tesa.ekowatch.auth.service.AuthService;
 import com.tesa.ekowatch.auth.service.BearerTokenService;
+import com.tesa.ekowatch.auth.service.DemoAccountPasswordProvisioner;
+import com.tesa.ekowatch.auth.service.DemoCredentialProvisioner;
 import com.tesa.ekowatch.shared.ApiExceptionHandler;
+import com.tesa.ekowatch.shared.OpenApiConfig;
 import com.tesa.ekowatch.shared.RuleViolation;
 import com.tesa.ekowatch.user.api.CurrentUserView;
 import com.tesa.ekowatch.user.api.Role;
 import com.tesa.ekowatch.user.api.UserApi;
+import io.swagger.v3.oas.models.Operation;
+import io.swagger.v3.oas.models.PathItem;
+import io.swagger.v3.oas.models.Paths;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.mock.env.MockEnvironment;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.cors.CorsConfiguration;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -168,6 +178,15 @@ class AuthAndSecurityTest {
                 .andExpect(jsonPath("$.tokenType").value("Bearer"))
                 .andExpect(jsonPath("$.user.role").value("RESIDENT"));
 
+        mvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"resident.one@demo.ekowatch.invalid","password":"secret"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").value("signed.token"))
+                .andExpect(jsonPath("$.tokenType").value("Bearer"));
+
         mvc.perform(post("/api/v1/auth/sessions")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -177,5 +196,68 @@ class AuthAndSecurityTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
                 .andExpect(jsonPath("$.status").value(401));
+    }
+
+    @Test
+    void corsAndOpenApiConfigSupportLocalhost5173QocentAndProblemJsonSwaggerResponses() {
+        SecurityConfig securityConfig = new SecurityConfig(
+                null,
+                null,
+                null,
+                "https://eko-watch--cflk38sh3.qocent.app,http://localhost:5173,https://*.qocent.app,https://*.qocent.com"
+        );
+        MockHttpServletRequest request = new MockHttpServletRequest("OPTIONS", "/api/v1/reports");
+        CorsConfiguration cors = securityConfig.corsConfigurationSource().getCorsConfiguration(request);
+        assertEquals("https://eko-watch--cflk38sh3.qocent.app", cors.checkOrigin("https://eko-watch--cflk38sh3.qocent.app"));
+        assertEquals("http://localhost:5173", cors.checkOrigin("http://localhost:5173"));
+        assertTrue(cors.getAllowedHeaders().contains("Idempotency-Key"));
+        assertTrue(cors.getAllowedHeaders().contains("Authorization"));
+        assertTrue(cors.getExposedHeaders().contains("Location"));
+        assertTrue(cors.getExposedHeaders().contains("X-Request-Id"));
+
+        OpenApiConfig openApiConfig = new OpenApiConfig();
+        var openApi = openApiConfig.ekowatchOpenAPI();
+        openApi.setPaths(new Paths()
+                .addPathItem("/api/v1/auth/sessions", new PathItem().post(new Operation()))
+                .addPathItem("/api/v1/reports", new PathItem().post(new Operation())));
+        openApiConfig.problemDetailsOpenApiCustomizer().customise(openApi);
+
+        assertTrue(openApi.getComponents().getSecuritySchemes().containsKey("bearerAuth"));
+        assertTrue(openApi.getComponents().getSchemas().containsKey("ProblemDetail"));
+        assertTrue(openApi.getPaths().get("/api/v1/auth/sessions").getPost().getSecurity().isEmpty());
+        var reportResponses = openApi.getPaths().get("/api/v1/reports").getPost().getResponses();
+        assertTrue(reportResponses.containsKey("400"));
+        assertTrue(reportResponses.containsKey("401"));
+        assertTrue(reportResponses.containsKey("403"));
+        assertTrue(reportResponses.containsKey("404"));
+        assertTrue(reportResponses.containsKey("409"));
+    }
+
+    @Test
+    void demoCredentialProvisionerEnforcesProductionSafeguardsAndOnlyTargetsFiveApprovedAccounts() {
+        JdbcTemplate db = mock(JdbcTemplate.class);
+        PasswordEncoder encoder = new BCryptPasswordEncoder();
+
+        for (String[] profiles : new String[][]{{}, {"local-demo", "prod"}, {"local-demo", "production"}}) {
+            MockEnvironment env = new MockEnvironment()
+                    .withProperty("ekowatch.demo.enabled", "true")
+                    .withProperty("ekowatch.demo.password", "EkoWatch2026!");
+            env.setActiveProfiles(profiles);
+            assertThrows(
+                    IllegalStateException.class,
+                    () -> new DemoCredentialProvisioner(db, encoder, env).run(new DefaultApplicationArguments())
+            );
+        }
+
+        assertEquals(
+                List.of(
+                        "demo1@example.invalid",
+                        "demo2@example.invalid",
+                        "demo4@example.invalid",
+                        "demo5@example.invalid",
+                        "demo8@example.invalid"
+                ),
+                DemoAccountPasswordProvisioner.APPROVED_DEMO_EMAILS
+        );
     }
 }

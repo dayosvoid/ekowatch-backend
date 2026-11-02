@@ -45,6 +45,34 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
 
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      summary: Login alias for POST /api/v1/auth/sessions
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '200':
+          description: Authenticated session created
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionView'
+        '400':
+          $ref: '#/components/responses/ValidationFailed'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
   /api/v1/users/me:
     get:
       operationId: getCurrentUser
@@ -565,7 +593,7 @@ components:
       type: string
       enum:
         - MISSED_PICKUP
-        - OVERFLOWING_BIN
+        - ILLEGAL_DUMPING
         - BLOCKED_DRAIN
         - FLOODED_ROAD
 
@@ -573,7 +601,7 @@ components:
       type: string
       enum:
         - CURRENT
-        - HISTORICAL
+        - EXPIRED
 
     CollectionStatus:
       type: string
@@ -587,7 +615,7 @@ components:
       type: string
       enum:
         - CONFIRMATIONS
-        - RECENT
+        - NEWEST
 
     Location:
       type: object
@@ -717,7 +745,7 @@ components:
         - streetName
         - collectionDate
         - collectionStatus
-        - missedPickupReportCount
+        - missedReportCount
       properties:
         scheduleId:
           type: string
@@ -739,7 +767,7 @@ components:
           type: string
           format: date-time
           nullable: true
-        missedPickupReportCount:
+        missedReportCount:
           type: integer
           format: int64
 
@@ -808,17 +836,17 @@ components:
         note:
           type: string
           minLength: 1
-          maxLength: 500
-        collectionDate:
-          type: string
-          format: date
-          nullable: true
+          maxLength: 1000
         photoId:
           type: string
           format: uuid
           nullable: true
-        mapLocation:
+        location:
           $ref: '#/components/schemas/Location'
+        collectionDate:
+          type: string
+          format: date
+          nullable: true
 
     ReportView:
       type: object
@@ -832,8 +860,8 @@ components:
         - createdAt
         - confirmationCount
         - confirmedByMe
-        - lastActivityAt
-        - locationSource
+        - lastEvidenceAt
+        - locationPrecision
       properties:
         reportId:
           type: string
@@ -850,38 +878,36 @@ components:
           type: string
         note:
           type: string
-        collectionDate:
+        photoUrl:
           type: string
-          format: date
           nullable: true
         createdAt:
           type: string
           format: date-time
-        photoUrl:
+        collectionDate:
           type: string
+          format: date
           nullable: true
         confirmationCount:
           type: integer
           format: int64
         confirmedByMe:
           type: boolean
-        lastActivityAt:
+        lastEvidenceAt:
           type: string
           format: date-time
         floodStatus:
           $ref: '#/components/schemas/FloodStatus'
-        freshUntil:
+        expiresAt:
           type: string
           format: date-time
           nullable: true
         mapLocation:
           $ref: '#/components/schemas/Location'
-        locationSource:
+        locationPrecision:
           type: string
           enum:
-            - REPORT
             - STREET
-            - NONE
 
     WardHazardsView:
       type: object

@@ -32,6 +32,8 @@ logging:
 
 ekowatch:
   flood-freshness-hours: ${EKOWATCH_FLOOD_FRESHNESS_HOURS:6}
+  cors:
+    allowed-origins: ${EKOWATCH_CORS_ALLOWED_ORIGINS:https://eko-watch--cflk38sh3.qocent.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:4173,https://*.qocent.app,https://*.qocent.com,https://*.vercel.app,https://*.netlify.app,https://*.onrender.com}
   auth:
     token-secret: ${EKOWATCH_TOKEN_SECRET:ekowatch-local-dev-secret-key-at-least-32-bytes}
     session-ttl-hours: ${EKOWATCH_SESSION_TTL_HOURS:8}
